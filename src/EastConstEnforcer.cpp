@@ -170,7 +170,51 @@ struct EastConstChecker : public MatchFinder::MatchCallback {
           // Now we have the exact location of the 'const' token
         }
       }
-      // Similar for references...
+      // Handle references
+      else if (const ReferenceTypeLoc RTL = TL.getAs<ReferenceTypeLoc>()) {
+        TypeLoc PointeeTL = RTL.getPointeeLoc();
+        // Find the const qualifier's exact location
+        if (auto QualTL = PointeeTL.getAs<QualifiedTypeLoc>()) {
+          SourceRange QualRange = QualTL.getSourceRange();
+          
+          // Get the base type (without qualifiers)
+          QualType BaseType = QualTL.getUnqualifiedLoc().getType();
+          std::string BaseTypeStr = BaseType.getAsString();
+          
+          // Get the reference location
+          SourceLocation RefLoc = RTL.getLocalSourceRange().getBegin();
+          
+          // Create a diagnostic
+          DiagnosticsEngine &DE = Result.Context->getDiagnostics();
+          unsigned DiagID = DE.getCustomDiagID(
+              DiagnosticsEngine::Warning,
+              "use east const style (place 'const' after the type)");
+          
+          auto Diag = DE.Report(QualRange.getBegin(), DiagID);
+          
+          // Create the replacement: [base_type] const&
+          std::string NewTypeStr = BaseTypeStr + " const" + 
+                                  Lexer::getSourceText(
+                                      CharSourceRange::getCharRange(RefLoc, RefLoc.getLocWithOffset(1)),
+                                      SM, LangOpts).str();
+          
+          // Get the full range from the beginning of const qualifier to after the &
+          SourceRange FullRange(QualRange.getBegin(), RefLoc.getLocWithOffset(1));
+          
+          // Add the fix-it hint
+          Diag << FixItHint::CreateReplacement(
+              CharSourceRange::getTokenRange(FullRange),
+              NewTypeStr);
+              
+          // Also add to the tool's replacement map
+          std::string FilePath = SM.getFilename(FullRange.getBegin()).str();
+          Replacement Rep(SM, CharSourceRange::getTokenRange(FullRange), NewTypeStr);
+          auto &FileReplaces = Tool.getReplacements()[FilePath];
+          llvm::consumeError(FileReplaces.add(Rep));
+          
+          llvm::errs() << "Added AST-based replacement for reference type in " << FilePath << "\n";
+        }
+      }
     }
   }
 
