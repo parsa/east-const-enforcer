@@ -41,10 +41,13 @@ struct EastConstChecker : public MatchFinder::MatchCallback {
 
     QualType QT = VD->getType();
     
-    // Check for const qualifier in the type or pointee type
+    // Check for const qualifier in the type or pointee/referenced type
     bool hasConst = QT.isConstQualified();
     if (QT->isPointerType()) {
       // For pointers, check if the pointee type is const-qualified
+      hasConst = hasConst || QT->getPointeeType().isConstQualified();
+    } else if (QT->isReferenceType()) {
+      // For references, check if the referenced type is const-qualified
       hasConst = hasConst || QT->getPointeeType().isConstQualified();
     }
     if (!hasConst) return;
@@ -74,8 +77,12 @@ struct EastConstChecker : public MatchFinder::MatchCallback {
         // For pointers with const pointee (const int*)
         isWestConst = Text.trim().starts_with("const") && 
                       QT->getPointeeType().isConstQualified();
+    } else if (QT->isReferenceType()) {
+        // For references with const referenced type (const int&)
+        isWestConst = Text.trim().starts_with("const") && 
+                      QT->getPointeeType().isConstQualified();
     } else {
-        // For non-pointers (const int)
+        // For non-pointers/references (const int)
         isWestConst = Text.trim().starts_with("const") && 
                       QT.isConstQualified();
     }
@@ -111,6 +118,11 @@ struct EastConstChecker : public MatchFinder::MatchCallback {
           // For pointer types, move "const" before the "*"
           NewType = std::regex_replace(FullTypeText,
                                     std::regex("const\\s+(\\w+)\\s*(\\*+)"), 
+                                    "$1 const$2");
+        } else if (QT->isReferenceType()) {
+          // For reference types, move "const" before the "&"
+          NewType = std::regex_replace(FullTypeText,
+                                    std::regex("const\\s+(\\w+)\\s*(&)"), 
                                     "$1 const$2");
         } else {
           // For non-pointer types, move "const" to the end
