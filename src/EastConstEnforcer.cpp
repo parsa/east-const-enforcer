@@ -156,6 +156,22 @@ struct EastConstChecker : public MatchFinder::MatchCallback {
         llvm::errs() << "Regex error: " << e.what() << "\n";
       }
     }
+
+    if (QT->isReferenceType() || QT->isPointerType()) {
+      // Get the qualified type locations
+      TypeLoc TL = VD->getTypeSourceInfo()->getTypeLoc();
+      
+      // For pointers and references with const pointee
+      if (const PointerTypeLoc PTL = TL.getAs<PointerTypeLoc>()) {
+        TypeLoc PointeeTL = PTL.getPointeeLoc();
+        // Find the const qualifier's exact location
+        if (auto QualTL = PointeeTL.getAs<QualifiedTypeLoc>()) {
+          SourceRange QualRange = QualTL.getSourceRange();
+          // Now we have the exact location of the 'const' token
+        }
+      }
+      // Similar for references...
+    }
   }
 
 private:
