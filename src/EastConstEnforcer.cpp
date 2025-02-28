@@ -20,6 +20,8 @@ using namespace llvm;
 static cl::OptionCategory EastConstCategory("east-const-enforcer options");
 static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::opt<bool> FixErrors("fix", cl::desc("Apply fixes to diagnosed warnings"), cl::cat(EastConstCategory));
+static cl::opt<bool> QuietMode("quiet", cl::desc("Suppress informational output"), 
+                              cl::cat(EastConstCategory));
 
 struct EastConstChecker : public MatchFinder::MatchCallback {
   EastConstChecker(RefactoringTool& Tool) : Tool(Tool) {}
@@ -29,6 +31,12 @@ struct EastConstChecker : public MatchFinder::MatchCallback {
     if (!VD) return;
     
     SourceManager &SM = *Result.SourceManager;
+    
+    // Skip variables in system headers or non-main files
+    if (SM.isInSystemHeader(VD->getLocation()) || !SM.isInMainFile(VD->getLocation())) {
+      return;
+    }
+    
     ASTContext &Context = *Result.Context;
     const LangOptions &LangOpts = Context.getLangOpts();
     
@@ -51,6 +59,10 @@ struct EastConstChecker : public MatchFinder::MatchCallback {
       hasConst = hasConst || QT->getPointeeType().isConstQualified();
     }
     if (!hasConst) return;
+
+    if (!QuietMode) {
+      llvm::errs() << "Processing variable: " << VD->getNameAsString() << "\n";
+    }
 
     llvm::errs() << "Processing variable: " << VD->getNameAsString() 
                  << " Type: " << QT.getAsString() 
@@ -215,6 +227,40 @@ struct EastConstChecker : public MatchFinder::MatchCallback {
           llvm::errs() << "Added AST-based replacement for reference type in " << FilePath << "\n";
         }
       }
+      // For simple types
+      if (auto QualTL = TL.getAs<QualifiedTypeLoc>()) {
+        SourceRange QualRange = QualTL.getSourceRange();
+        QualType BaseType = QualTL.getUnqualifiedLoc().getType();
+        std::string BaseTypeStr = BaseType.getAsString();
+        
+        // Create a replacement with the const after the type
+        std::string NewTypeStr = BaseTypeStr + " const";
+        
+        // Apply the replacement
+        // Create a diagnostic
+        DiagnosticsEngine &DE = Result.Context->getDiagnostics();
+        unsigned DiagID = DE.getCustomDiagID(
+            DiagnosticsEngine::Warning,
+            "use east const style (place 'const' after the type)");
+        
+        auto Diag = DE.Report(QualRange.getBegin(), DiagID);
+        
+        // Get the full range from the beginning of const qualifier to after the type
+        SourceRange FullRange(QualRange.getBegin(), QualRange.getEnd());
+        
+        // Add the fix-it hint
+        Diag << FixItHint::CreateReplacement(
+            CharSourceRange::getTokenRange(FullRange),
+            NewTypeStr);
+            
+        // Also add to the tool's replacement map
+        std::string FilePath = SM.getFilename(FullRange.getBegin()).str();
+        Replacement Rep(SM, CharSourceRange::getTokenRange(FullRange), NewTypeStr);
+        auto &FileReplaces = Tool.getReplacements()[FilePath];
+        llvm::consumeError(FileReplaces.add(Rep));
+        
+        llvm::errs() << "Added AST-based replacement for simple type in " << FilePath << "\n";
+      }
     }
   }
 
@@ -253,6 +299,9 @@ int main(int argc, const char **argv) {
   if (FixErrors) {
     // Get the replacements map
     auto &ReplacementsMap = Tool.getReplacements();
+    
+    // Remove any entries with empty file paths
+    ReplacementsMap.erase("");
     
     // Apply the replacements to each file
     llvm::errs() << "Applying fixes to " << ReplacementsMap.size() << " files\n";

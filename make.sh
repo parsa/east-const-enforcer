@@ -4,4 +4,9 @@ cmake -B build -S . \
     -DLLVM_DIR=/opt/homebrew/Cellar/llvm/19.1.7_1/lib/cmake/llvm \
     -DClang_DIR=/opt/homebrew/Cellar/llvm/19.1.7_1/lib/cmake/clang
 cmake --build build
-./build/east-const-enforcer -fix /Users/parsa/Repositories/playground/east-const-enforcer/file.cpp -- --std=c++17
+./build/east-const-enforcer \
+    -fix  /Users/parsa/Repositories/playground/east-const-enforcer/file.cpp \
+    -- \
+    -std=c++17 \
+    -extra-arg=-isystem/opt/homebrew/Cellar/llvm/19.1.7_1/include/c++/v1 \
+    -extra-arg=-isystem/opt/homebrew/Cellar/llvm/19.1.7_1/lib/clang/19/include
