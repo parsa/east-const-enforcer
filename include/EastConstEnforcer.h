@@ -42,6 +42,9 @@ private:
                           const LangOptions &LangOpts);
   void processFunctionDecl(const FunctionDecl *FD, SourceManager &SM,
                            const LangOptions &LangOpts);
+  void processClassTemplateSpec(
+      const ClassTemplateSpecializationDecl *Spec, SourceManager &SM,
+      const LangOptions &LangOpts);
   void processTypeLoc(TypeLoc TL, SourceManager &SM,
                       const LangOptions &LangOpts);
   void processQualifiedTypeLoc(QualifiedTypeLoc QTL, SourceManager &SM,
@@ -49,6 +52,18 @@ private:
   bool findQualifierRange(QualifiedTypeLoc QTL, SourceManager &SM,
                           SourceLocation &QualBegin,
                           std::vector<std::string> &MovedQualifiers) const;
+  bool shouldUseSpellingFallback(QualifiedTypeLoc QTL, TypeLoc Unqualified,
+                                 SourceManager &SM,
+                                 const LangOptions &LangOpts) const;
+  bool findQualifierRangeFromSpelling(
+      QualifiedTypeLoc QTL, SourceManager &SM, const LangOptions &LangOpts,
+      SourceLocation &QualBegin, SourceLocation &BaseBegin,
+      std::vector<std::string> &MovedQualifiers) const;
+  bool typeLocNeedsSpellingFallback(TypeLoc TL) const;
+  bool isDeclaratorTypeLoc(TypeLoc TL) const;
+  bool shouldFixDanglingQualifier(TypeLoc TL) const;
+  bool fixDanglingQualifierTokens(TypeLoc TL, SourceManager &SM,
+                                  const LangOptions &LangOpts);
   std::string getSourceText(const SourceManager &SM, const LangOptions &LangOpts,
                             CharSourceRange Range) const;
   std::string buildQualifierSuffix(

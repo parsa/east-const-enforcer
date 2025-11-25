@@ -59,6 +59,77 @@ struct array {
   array() = default;
 };
 
+template <typename T, T V>
+struct integral_constant {
+  static constexpr T value = V;
+  using value_type = T;
+  using type = integral_constant;
+  constexpr operator value_type() const noexcept { return value; }
+};
+
+using true_type = integral_constant<bool, true>;
+using false_type = integral_constant<bool, false>;
+
+template <typename T>
+struct is_integral : false_type {};
+
+template <>
+struct is_integral<bool> : true_type {};
+
+template <>
+struct is_integral<char> : true_type {};
+
+template <>
+struct is_integral<signed char> : true_type {};
+
+template <>
+struct is_integral<unsigned char> : true_type {};
+
+template <>
+struct is_integral<short> : true_type {};
+
+template <>
+struct is_integral<unsigned short> : true_type {};
+
+template <>
+struct is_integral<int> : true_type {};
+
+template <>
+struct is_integral<unsigned int> : true_type {};
+
+template <>
+struct is_integral<long> : true_type {};
+
+template <>
+struct is_integral<unsigned long> : true_type {};
+
+template <>
+struct is_integral<long long> : true_type {};
+
+template <>
+struct is_integral<unsigned long long> : true_type {};
+
+template <typename T>
+struct is_integral<const T> : is_integral<T> {};
+
+template <typename T>
+struct is_integral<volatile T> : is_integral<T> {};
+
+template <typename T>
+struct is_integral<const volatile T> : is_integral<T> {};
+
+template <typename T>
+inline constexpr bool is_integral_v = is_integral<T>::value;
+
+template <typename T>
+struct is_const : false_type {};
+
+template <typename T>
+struct is_const<T const> : true_type {};
+
+template <typename T>
+inline constexpr bool is_const_v = is_const<T>::value;
+
 } // namespace std
 
 )cpp";
@@ -79,7 +150,7 @@ class EastConstEnforcerTest : public ::testing::Test {
 protected:
   std::string runToolOnCode(const std::string &code) {
     // Provide an in-memory compilation database for the test file.
-    FixedCompilationDatabase compilations(".", {"-std=c++17"});
+    FixedCompilationDatabase compilations(".", {"-std=c++20"});
     std::vector<std::string> sources = {"test.cpp"};
 
     // Use a RefactoringTool for replacement tracking
@@ -109,6 +180,10 @@ protected:
     auto nonTypeParamMatcher =
       nonTypeTemplateParmDecl().bind("nonTypeTemplateParm");
     finder.addMatcher(nonTypeParamMatcher, &checker);
+
+    auto classTemplateSpecMatcher =
+        classTemplateSpecializationDecl().bind("classTemplateSpec");
+    finder.addMatcher(classTemplateSpecMatcher, &checker);
     
     // Run the tool
     std::unique_ptr<FrontendActionFactory> factory = newFrontendActionFactory(&finder);
@@ -416,16 +491,16 @@ TEST_F(EastConstEnforcerTest, HandlesFunctionPointersAndMembers) {
   std::string expected = R"cpp(
     struct Foo;
 
-    using FuncPtr = int const (*)(const int*, const std::string&);
-    using MemberFuncPtr = std::string const (Foo::*)(const int&) const;
+    using FuncPtr = int const (*)(int const*, std::string const&);
+    using MemberFuncPtr = std::string const (Foo::*)(int const&) const;
 
-    int const (*fp)(const int*, const std::string&) = nullptr;
-    int const* (*fp2)(const int* const, const std::string&) = nullptr;
-    const FuncPtr fpAlias = nullptr;
+    int const (*fp)(int const*, std::string const&) = nullptr;
+    int const* (*fp2)(int const* const, std::string const&) = nullptr;
+    FuncPtr const fpAlias = nullptr;
 
     struct Bar {
-      int const (*callback)(const int*, const std::string&);
-      const MemberFuncPtr methodPtr;
+      int const (*callback)(int const*, std::string const&);
+      MemberFuncPtr const methodPtr;
     };
   )cpp";
 
@@ -471,6 +546,148 @@ TEST_F(EastConstEnforcerTest, HandlesMacros) {
 
     int const outsideMacro = 5;
     std::vector<int const*> const outsideVec;
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstEnforcerTest, HandlesAdvancedFunctionPointers) {
+  std::string input = R"cpp(
+    struct Foo {
+      const int memFn(const int& x) const noexcept;
+      const int& refFn(const int* const ptr) const &;
+    };
+
+    using MemFnPtr = const int (Foo::*)(const int&) const noexcept;
+    using RefMemFnPtr = const int& (Foo::*)(const int* const) const &;
+
+    const MemFnPtr p1 = &Foo::memFn;
+    const RefMemFnPtr p2 = &Foo::refFn;
+
+    void takesFuncPtr(const int (*fp)(const int&));
+    void takesMemPtr(const int (Foo::*mp)(const int&) const);
+  )cpp";
+
+  std::string expected = R"cpp(
+    struct Foo {
+      int const memFn(int const& x) const noexcept;
+      int const& refFn(int const* const ptr) const &;
+    };
+
+    using MemFnPtr = int const (Foo::*)(int const&) const noexcept;
+    using RefMemFnPtr = int const& (Foo::*)(int const* const) const &;
+
+    MemFnPtr const p1 = &Foo::memFn;
+    RefMemFnPtr const p2 = &Foo::refFn;
+
+    void takesFuncPtr(int const (*fp)(int const&));
+    void takesMemPtr(int const (Foo::*mp)(int const&) const);
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstEnforcerTest, HandlesAutoAndDecltypeReturns) {
+  std::string input = R"cpp(
+    const int global = 0;
+
+    const auto func1() { return global; }
+    const auto& func2();
+    const decltype(global) func3();
+    const decltype((global)) func4();
+  )cpp";
+
+  std::string expected = R"cpp(
+    int const global = 0;
+
+    auto const func1() { return global; }
+    auto const& func2();
+    decltype(global) const func3();
+    decltype((global)) const func4();
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstEnforcerTest, HandlesAttributesAndQualifiers) {
+  std::string input = R"cpp(
+    [[nodiscard]] const int attrFn1();
+    __attribute__((nodiscard)) const int attrFn2();
+
+    [[nodiscard]] const std::vector<const int*> attrVec();
+  )cpp";
+
+  std::string expected = R"cpp(
+    [[nodiscard]] int const attrFn1();
+    __attribute__((nodiscard)) int const attrFn2();
+
+    [[nodiscard]] std::vector<int const*> const attrVec();
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstEnforcerTest, HandlesLambdasAndModernConstructs) {
+  std::string input = R"cpp(
+    auto lambda1 = [](const int x) -> const int { return x; };
+    auto lambda2 = [](const std::string& s) { const int y = 42; return s; };
+
+    constexpr const int cx = 5;
+    constexpr const std::vector<const int> cv = {};
+  )cpp";
+
+  std::string expected = R"cpp(
+    auto lambda1 = [](int const x) -> int const { return x; };
+    auto lambda2 = [](std::string const& s) { int const y = 42; return s; };
+
+    constexpr int const cx = 5;
+    constexpr std::vector<int const> const cv = {};
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstEnforcerTest, HandlesExoticTemplates) {
+  std::string input = R"cpp(
+    template <typename T, const int N = 4>
+    struct ArrayWrapper {
+      const T data[N];
+    };
+
+    template <typename T>
+    struct Wrapper;
+
+    template <typename T>
+    struct Wrapper<const T> {
+      const T value;
+    };
+
+    template <typename T>
+    concept ConstIntegral = std::is_integral_v<T> && std::is_const_v<T>;
+
+    template <ConstIntegral T>
+    const T getConstIntegral();
+  )cpp";
+
+  std::string expected = R"cpp(
+    template <typename T, int const N = 4>
+    struct ArrayWrapper {
+      T const data[N];
+    };
+
+    template <typename T>
+    struct Wrapper;
+
+    template <typename T>
+    struct Wrapper<T const> {
+      T const value;
+    };
+
+    template <typename T>
+    concept ConstIntegral = std::is_integral_v<T> && std::is_const_v<T>;
+
+    template <ConstIntegral T>
+    T const getConstIntegral();
   )cpp";
 
   testTransformation(input, expected);

@@ -56,6 +56,10 @@ int main(int argc, const char **argv) {
     auto NonTypeParamMatcher =
       nonTypeTemplateParmDecl().bind("nonTypeTemplateParm");
     Finder.addMatcher(NonTypeParamMatcher, &Checker);
+
+    auto ClassTemplateSpecMatcher =
+        classTemplateSpecializationDecl().bind("classTemplateSpec");
+    Finder.addMatcher(ClassTemplateSpecMatcher, &Checker);
   
     // Create custom factory
     auto Factory = newFrontendActionFactory(&Finder);
