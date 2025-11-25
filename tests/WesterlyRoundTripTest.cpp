@@ -325,9 +325,8 @@ const std::string /* Foo */ kFoo6 = "foo";
 // Foo
 std::string const kFoo1 = "foo";
 
-const
 // Foo
-std::string kFoo2 = "foo";
+std::string const kFoo2 = "foo";
 
 std::string const 
 // Foo

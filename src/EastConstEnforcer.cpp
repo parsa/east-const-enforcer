@@ -911,10 +911,6 @@ bool EastConstChecker::collectQualifierTokens(
   if (!QualPtr || !RemovalPtr || RemovalPtr < QualPtr)
     return false;
 
-  llvm::StringRef Between(QualPtr, RemovalPtr - QualPtr);
-  if (Between.contains('\n'))
-    return false;
-
   for (size_t I = FirstMoveIdx; I < QualifierTokens.size(); ++I)
     MovedQualifiers.emplace_back(QualifierTokens[I].Keyword);
 

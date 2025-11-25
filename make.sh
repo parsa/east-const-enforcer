@@ -12,11 +12,21 @@ cmake -B "$BUILD_DIR" -S . \
 
 cmake --build "$BUILD_DIR"
 
-# ./build/east-const-enforcer \
-#     -fix \
-#     /Users/parsa/Repositories/playground/east-const-enforcer/file.cpp -- \
+# SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
+# CLANG_INC=/opt/homebrew/Cellar/llvm/21.1.6/lib/clang/21/include
+# LIBCXX=/opt/homebrew/Cellar/llvm/21.1.6/include/c++/v1
+# W_INPUT=tests/westerly_test/002.in.cc
+
+# if [[ -f "$W_INPUT" ]]; then
+#   ./build/east-const-enforcer -fix "$W_INPUT" -- \
 #     -std=c++17 \
-#     -isystem /opt/homebrew/Cellar/llvm/21.1.6/include/c++/v1 \
-#     -isystem /opt/homebrew/Cellar/llvm/21.1.6/lib/clang/19/include
+#     -isysroot "$SDK_PATH" \
+#     -isystem "$LIBCXX" \
+#     -isystem "$SDK_PATH/usr/include" \
+#     -isystem "$CLANG_INC"
+# else
+#   echo "Skipping manual fix for $W_INPUT (file not found)"
+# fi
+
 # cmake --build build --target test
 "$BUILD_DIR"/east-const-enforcer-test
