@@ -28,10 +28,10 @@ target_link_libraries(east-const-lib PRIVATE
 
 # Main executable
 add_executable(east-const-enforcer
-  src/EastConstEnforcer.cpp
   src/prog.cpp)
 
 target_link_libraries(east-const-enforcer PRIVATE
+  east-const-lib
   clangTooling
   clangASTMatchers
   clangBasic
