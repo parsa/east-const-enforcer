@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.28)
 project(EastConstEnforcer)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -15,12 +15,47 @@ include_directories(${CLANG_INCLUDE_DIRS})
 include_directories(include)
 add_definitions(${LLVM_DEFINITIONS})
 
-add_executable(east-const-enforcer
+# Create a library for EastConstEnforcer that can be shared between executables
+add_library(east-const-lib STATIC
   src/EastConstEnforcer.cpp)
+target_include_directories(east-const-lib PUBLIC include)
 
-target_link_libraries(east-const-enforcer
-  PRIVATE
+target_link_libraries(east-const-lib PRIVATE
   clangTooling
   clangASTMatchers
   clangBasic
   clangFrontend)
+
+# Main executable
+add_executable(east-const-enforcer
+  src/EastConstEnforcer.cpp
+  src/prog.cpp)
+
+target_link_libraries(east-const-enforcer PRIVATE
+  clangTooling
+  clangASTMatchers
+  clangBasic
+  clangFrontend)
+
+# Add GoogleTest
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.zip
+)
+FetchContent_MakeAvailable(googletest)
+
+enable_testing()
+
+# Add test executable
+add_executable(east-const-enforcer-test tests/EastConstEnforcerTest.cpp)
+target_link_libraries(east-const-enforcer-test PRIVATE
+  east-const-lib
+  clangTooling
+  clangBasic
+  clangASTMatchers
+  gtest_main
+  pthread)
+
+include(GoogleTest)
+gtest_discover_tests(east-const-enforcer-test)
