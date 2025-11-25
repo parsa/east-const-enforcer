@@ -6,6 +6,7 @@
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Rewrite/Core/Rewriter.h"  // Add this include for Rewriter
+#include <llvm/Support/Error.h>
 #include <clang/Tooling/CompilationDatabase.h>
 
 namespace {
@@ -174,31 +175,22 @@ protected:
     tool.mapVirtualFile("fake_std.h", getFakeStdHeader());
     
     // Create our checker and set up matchers
-    EastConstChecker checker(tool);
+    EastConstChecker checker([&tool](const SourceManager &SM,
+                                     CharSourceRange Range,
+                                     llvm::StringRef NewText) {
+      Replacement Rep(SM, Range, NewText);
+      std::string FilePath = Rep.getFilePath().str();
+      if (FilePath.empty())
+        return;
+      auto &FileReplacements = tool.getReplacements()[FilePath];
+      llvm::Error Err = FileReplacements.add(Rep);
+      if (Err) {
+        llvm::errs() << "Test replacement error for " << FilePath << ": "
+                     << llvm::toString(std::move(Err)) << "\n";
+      }
+    });
     MatchFinder finder;
-
-    auto varMatcher = varDecl(unless(parmVarDecl())).bind("varDecl");
-    finder.addMatcher(varMatcher, &checker);
-
-    auto funcMatcher = functionDecl().bind("functionDecl");
-    finder.addMatcher(funcMatcher, &checker);
-
-    auto fieldMatcher = fieldDecl().bind("fieldDecl");
-    finder.addMatcher(fieldMatcher, &checker);
-
-    auto typedefMatcher = typedefDecl().bind("typedefDecl");
-    finder.addMatcher(typedefMatcher, &checker);
-
-    auto aliasMatcher = typeAliasDecl().bind("aliasDecl");
-    finder.addMatcher(aliasMatcher, &checker);
-
-    auto nonTypeParamMatcher =
-      nonTypeTemplateParmDecl().bind("nonTypeTemplateParm");
-    finder.addMatcher(nonTypeParamMatcher, &checker);
-
-    auto classTemplateSpecMatcher =
-        classTemplateSpecializationDecl().bind("classTemplateSpec");
-    finder.addMatcher(classTemplateSpecMatcher, &checker);
+    registerEastConstMatchers(finder, &checker);
     
     // Run the tool
     std::unique_ptr<FrontendActionFactory> factory = newFrontendActionFactory(&finder);

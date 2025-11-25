@@ -23,6 +23,10 @@
        -isystem /opt/homebrew/Cellar/llvm/21.1.6/include/c++/v1 \
        -isystem /opt/homebrew/Cellar/llvm/21.1.6/lib/clang/19/include
      ```
+- **Clang-Tidy plugin build & usage:**
+  - The `east-const-tidy` module (built automatically with the regular targets) lives at `build/libeast-const-tidy.dylib` on macOS.
+  - Load it with clang-tidy: `clang-tidy -load ./build/libeast-const-tidy.dylib -checks=-*,east-const-enforcer file.cpp -- <compile flags>`.
+  - Provide the same compile commands (typically via `compile_commands.json`) that you would supply to the standalone refactoring tool.
 
 ## Tests to Keep Green
 - **Executable:** `./build/east-const-enforcer-test`

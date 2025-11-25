@@ -7,6 +7,7 @@
 #include "clang/Tooling/CompilationDatabase.h"
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Tooling.h"
+#include <llvm/Support/Error.h>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -169,20 +170,22 @@ protected:
     tool.mapVirtualFile("westerly.cpp", code);
     tool.mapVirtualFile("fake_std.h", getFakeStdHeader());
 
-    EastConstChecker checker(tool);
+    EastConstChecker checker([&tool](const SourceManager &SM,
+                                     CharSourceRange Range,
+                                     llvm::StringRef NewText) {
+      Replacement Rep(SM, Range, NewText);
+      std::string FilePath = Rep.getFilePath().str();
+      if (FilePath.empty())
+        return;
+      auto &FileReplacements = tool.getReplacements()[FilePath];
+      llvm::Error Err = FileReplacements.add(Rep);
+      if (Err) {
+        llvm::errs() << "Test replacement error for " << FilePath << ": "
+                     << llvm::toString(std::move(Err)) << "\n";
+      }
+    });
     MatchFinder finder;
-
-    finder.addMatcher(varDecl(unless(parmVarDecl())).bind("varDecl"),
-                      &checker);
-    finder.addMatcher(functionDecl().bind("functionDecl"), &checker);
-    finder.addMatcher(fieldDecl().bind("fieldDecl"), &checker);
-    finder.addMatcher(typedefDecl().bind("typedefDecl"), &checker);
-    finder.addMatcher(typeAliasDecl().bind("aliasDecl"), &checker);
-    finder.addMatcher(
-        nonTypeTemplateParmDecl().bind("nonTypeTemplateParm"), &checker);
-    finder.addMatcher(
-        classTemplateSpecializationDecl().bind("classTemplateSpec"),
-        &checker);
+    registerEastConstMatchers(finder, &checker);
 
     auto factory = newFrontendActionFactory(&finder);
     int runResult = tool.run(factory.get());

@@ -18,6 +18,7 @@ add_definitions(${LLVM_DEFINITIONS})
 # Create a library for EastConstEnforcer that can be shared between executables
 add_library(east-const-lib STATIC
   src/EastConstEnforcer.cpp)
+set_target_properties(east-const-lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(east-const-lib PUBLIC include)
 
 target_link_libraries(east-const-lib PRIVATE
@@ -36,6 +37,17 @@ target_link_libraries(east-const-enforcer PRIVATE
   clangASTMatchers
   clangBasic
   clangFrontend)
+
+add_library(east-const-tidy MODULE
+  src/EastConstTidyModule.cpp)
+target_link_libraries(east-const-tidy PRIVATE
+  east-const-lib
+  clangTidy
+  clangTidyUtils
+  clangTooling
+  clangASTMatchers
+  clangFrontend
+  clangBasic)
 
 # Add GoogleTest
 include(FetchContent)

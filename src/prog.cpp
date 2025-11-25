@@ -9,9 +9,46 @@
 #include <clang/Tooling/Refactoring.h>
 #include <clang/Tooling/Tooling.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/Error.h>
 
 #include <cstddef>
 #include <string>
+
+namespace {
+
+class RefactoringReplacementHandler {
+public:
+  explicit RefactoringReplacementHandler(RefactoringTool &Tool) : Tool(Tool) {}
+
+  void operator()(const SourceManager &SM, CharSourceRange Range,
+                  llvm::StringRef NewText) const {
+    Replacement Rep(SM, Range, NewText);
+    std::string FilePath = Rep.getFilePath().str();
+    if (FilePath.empty())
+      return;
+
+    auto &FileReplacements = Tool.getReplacements()[FilePath];
+    llvm::Error Err = FileReplacements.add(Rep);
+    if (Err) {
+      if (!QuietMode) {
+        llvm::errs() << "Error adding replacement to "
+                     << FilePath << ": "
+                     << llvm::toString(std::move(Err)) << "\n";
+      }
+      return;
+    }
+
+    if (!QuietMode && !NewText.empty()) {
+      llvm::errs() << "Inserted qualifier suffix '" << NewText << "' in "
+                   << FilePath << "\n";
+    }
+  }
+
+private:
+  RefactoringTool &Tool;
+};
+
+} // namespace
 
 
 int main(int argc, const char **argv) {
@@ -30,36 +67,10 @@ int main(int argc, const char **argv) {
       llvm::errs() << "Fix mode enabled\n";
     }
     
-    EastConstChecker Checker(Tool);
+    RefactoringReplacementHandler Handler(Tool);
+    EastConstChecker Checker(Handler);
     MatchFinder Finder;
-  
-    // Match variable declarations
-    auto VarMatcher = varDecl(unless(parmVarDecl())).bind("varDecl");
-    Finder.addMatcher(VarMatcher, &Checker);
-    
-    // Match function declarations for return types and parameters
-    auto FuncMatcher = functionDecl().bind("functionDecl");
-    Finder.addMatcher(FuncMatcher, &Checker);
-    
-    // Match class field declarations
-    auto FieldMatcher = fieldDecl().bind("fieldDecl");
-    Finder.addMatcher(FieldMatcher, &Checker);
-    
-    // Match typedef declarations
-    auto TypedefMatcher = typedefDecl().bind("typedefDecl");
-    Finder.addMatcher(TypedefMatcher, &Checker);
-    
-    // Match using declarations (C++11 style typedefs)
-    auto AliasMatcher = typeAliasDecl().bind("aliasDecl");
-    Finder.addMatcher(AliasMatcher, &Checker);
-
-    auto NonTypeParamMatcher =
-      nonTypeTemplateParmDecl().bind("nonTypeTemplateParm");
-    Finder.addMatcher(NonTypeParamMatcher, &Checker);
-
-    auto ClassTemplateSpecMatcher =
-        classTemplateSpecializationDecl().bind("classTemplateSpec");
-    Finder.addMatcher(ClassTemplateSpecMatcher, &Checker);
+    registerEastConstMatchers(Finder, &Checker);
   
     // Create custom factory
     auto Factory = newFrontendActionFactory(&Finder);

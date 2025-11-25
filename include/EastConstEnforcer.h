@@ -15,6 +15,7 @@
 #include <llvm/ADT/DenseSet.h>
 
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -29,10 +30,14 @@ extern cl::extrahelp CommonHelp;
 extern cl::opt<bool> FixErrors;
 extern cl::opt<bool> QuietMode;
 
+using ReplacementHandler =
+    std::function<void(const clang::SourceManager &, CharSourceRange,
+                       llvm::StringRef)>;
+
 // Checker class
 class EastConstChecker : public MatchFinder::MatchCallback {
 public:
-  EastConstChecker(RefactoringTool& Tool);
+  explicit EastConstChecker(ReplacementHandler Handler);
   void run(const MatchFinder::MatchResult &Result) override;
 
 private:
@@ -80,8 +85,11 @@ private:
   SourceLocation computeInsertLocation(TypeLoc Unqualified, SourceManager &SM,
                                        const LangOptions &LangOpts) const;
 
-  RefactoringTool &Tool;
+  ReplacementHandler ReplacementCallback;
   mutable llvm::DenseSet<unsigned> ProcessedQualifierStarts;
 };
+
+void registerEastConstMatchers(MatchFinder &Finder,
+                               MatchFinder::MatchCallback *Callback);
 
 #endif // EAST_CONST_ENFORCER_H

@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstddef>
 #include <string>
+#include <utility>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -21,7 +22,8 @@ cl::opt<bool> FixErrors("fix", cl::desc("Apply fixes to diagnosed warnings"),
 cl::opt<bool> QuietMode("quiet", cl::desc("Suppress informational output"),
                         cl::cat(EastConstCategory));
 
-EastConstChecker::EastConstChecker(RefactoringTool &Tool) : Tool(Tool) {}
+EastConstChecker::EastConstChecker(ReplacementHandler Handler)
+  : ReplacementCallback(std::move(Handler)) {}
 
 void EastConstChecker::run(const MatchFinder::MatchResult &Result) {
   if (!Result.Context || !Result.SourceManager)
@@ -406,31 +408,18 @@ std::string EastConstChecker::buildQualifierSuffix(
 }
 
 void EastConstChecker::addReplacement(const SourceManager &SM,
-																			CharSourceRange Range,
-																			llvm::StringRef NewText) {
-	if (Range.isInvalid())
-		return;
+                                      CharSourceRange Range,
+                                      llvm::StringRef NewText) {
+  if (!ReplacementCallback)
+    return;
+  if (Range.isInvalid())
+    return;
 
-	SourceLocation Loc = Range.getBegin();
-	if (Loc.isInvalid())
-		return;
+  SourceLocation Loc = Range.getBegin();
+  if (Loc.isInvalid())
+    return;
 
-	std::string FilePath = SM.getFilename(Loc).str();
-	if (FilePath.empty())
-		return;
-
-	Replacement Rep(SM, Range, NewText);
-	auto &FileReplacements = Tool.getReplacements()[FilePath];
-	llvm::Error Err = FileReplacements.add(Rep);
-  if (Err) {
-    if (!QuietMode) {
-      llvm::errs() << "Error adding replacement to " << FilePath << ": "
-           << llvm::toString(std::move(Err)) << "\n";
-    }
-  } else if (!QuietMode && !NewText.empty()) {
-    llvm::errs() << "Inserted qualifier suffix '" << NewText << "' in "
-         << FilePath << "\n";
-  }
+  ReplacementCallback(SM, Range, NewText);
 }
 
 SourceLocation EastConstChecker::computeInsertLocation(TypeLoc Unqualified,
@@ -915,4 +904,21 @@ bool EastConstChecker::collectQualifierTokens(
     MovedQualifiers.emplace_back(QualifierTokens[I].Keyword);
 
   return true;
+}
+
+void registerEastConstMatchers(MatchFinder &Finder,
+                               MatchFinder::MatchCallback *Callback) {
+  if (!Callback)
+    return;
+
+  Finder.addMatcher(varDecl(unless(parmVarDecl())).bind("varDecl"), Callback);
+  Finder.addMatcher(functionDecl().bind("functionDecl"), Callback);
+  Finder.addMatcher(fieldDecl().bind("fieldDecl"), Callback);
+  Finder.addMatcher(typedefDecl().bind("typedefDecl"), Callback);
+  Finder.addMatcher(typeAliasDecl().bind("aliasDecl"), Callback);
+  Finder.addMatcher(nonTypeTemplateParmDecl().bind("nonTypeTemplateParm"),
+                    Callback);
+  Finder.addMatcher(
+      classTemplateSpecializationDecl().bind("classTemplateSpec"),
+      Callback);
 }
