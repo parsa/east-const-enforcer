@@ -395,3 +395,83 @@ TEST_F(EastConstEnforcerTest, HandlesEdgeCases) {
   
   testTransformation(input, expected);
 }
+
+TEST_F(EastConstEnforcerTest, HandlesFunctionPointersAndMembers) {
+  std::string input = R"cpp(
+    struct Foo;
+
+    using FuncPtr = const int (*)(const int*, const std::string&);
+    using MemberFuncPtr = const std::string (Foo::*)(const int&) const;
+
+    const int (*fp)(const int*, const std::string&) = nullptr;
+    const int* (*fp2)(const int* const, const std::string&) = nullptr;
+    const FuncPtr fpAlias = nullptr;
+
+    struct Bar {
+      const int (*callback)(const int*, const std::string&);
+      const MemberFuncPtr methodPtr;
+    };
+  )cpp";
+
+  std::string expected = R"cpp(
+    struct Foo;
+
+    using FuncPtr = int const (*)(const int*, const std::string&);
+    using MemberFuncPtr = std::string const (Foo::*)(const int&) const;
+
+    int const (*fp)(const int*, const std::string&) = nullptr;
+    int const* (*fp2)(const int* const, const std::string&) = nullptr;
+    const FuncPtr fpAlias = nullptr;
+
+    struct Bar {
+      int const (*callback)(const int*, const std::string&);
+      const MemberFuncPtr methodPtr;
+    };
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstEnforcerTest, HandlesTrailingReturnTypes) {
+  std::string input = R"cpp(
+    auto func1() -> const int;
+    auto func2() -> const std::string&;
+    auto func3() -> const std::vector<const int*>;
+    auto func4() -> const std::pair<const int, const std::string>;
+  )cpp";
+
+  std::string expected = R"cpp(
+    auto func1() -> int const;
+    auto func2() -> std::string const&;
+    auto func3() -> std::vector<int const*> const;
+    auto func4() -> std::pair<int const, std::string const> const;
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstEnforcerTest, HandlesMacros) {
+  std::string input = R"cpp(
+    #define DECL_CONST_INT(name) const int name = 42;
+    #define DECL_MIXED(name) const std::vector<const int*> name;
+
+    DECL_CONST_INT(macroVar)
+    DECL_MIXED(macroVec)
+
+    const int outsideMacro = 5;
+    const std::vector<const int*> outsideVec;
+  )cpp";
+
+  std::string expected = R"cpp(
+    #define DECL_CONST_INT(name) const int name = 42;
+    #define DECL_MIXED(name) const std::vector<const int*> name;
+
+    DECL_CONST_INT(macroVar)
+    DECL_MIXED(macroVec)
+
+    int const outsideMacro = 5;
+    std::vector<int const*> const outsideVec;
+  )cpp";
+
+  testTransformation(input, expected);
+}
