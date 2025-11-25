@@ -10,7 +10,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 
 @dataclass
@@ -31,6 +31,18 @@ class IntegrationCase:
 
 class CaseFailure(Exception):
   pass
+
+
+@dataclass
+class RunnerConfig:
+  default_compile_flags: List[str]
+  default_tool_args: List[str]
+  default_clang_tidy_args: List[str]
+  clang_tidy_path: Optional[str]
+
+  @classmethod
+  def empty(cls) -> RunnerConfig:
+    return cls([], [], [], None)
 
 
 def load_cases(cases_path: Path) -> list[IntegrationCase]:
@@ -54,6 +66,16 @@ def load_cases(cases_path: Path) -> list[IntegrationCase]:
         )
     )
   return cases
+
+
+def load_runner_config(config_path: Path) -> RunnerConfig:
+  data = json.loads(config_path.read_text())
+  return RunnerConfig(
+      default_compile_flags=data.get("default_compile_flags", []),
+      default_tool_args=data.get("default_tool_args", []),
+      default_clang_tidy_args=data.get("default_clang_tidy_args", []),
+      clang_tidy_path=data.get("clang_tidy_path"),
+  )
 
 
 def locate_plugin(build_dir: Path) -> Path:
@@ -120,21 +142,30 @@ def compare_files(expected: Path, actual: Path, case_name: str) -> None:
   )
 
 
-def build_command(case: IntegrationCase, *, tool_path: Path, plugin_path: Path, clang_tidy: str, source: Path) -> List[str]:
-  base_flags = case.compile_flags
+def build_command(
+    case: IntegrationCase,
+    *,
+    tool_path: Path,
+    plugin_path: Path,
+    clang_tidy: str,
+    source: Path,
+    compile_flags: List[str],
+    standalone_args: List[str],
+    clang_tidy_args: List[str],
+) -> List[str]:
   if case.mode == "standalone-fix":
-    return [str(tool_path), *case.tool_args, "-fix", str(source), "--", *base_flags]
+    return [str(tool_path), *standalone_args, "-fix", str(source), "--", *compile_flags]
   if case.mode == "clang-tidy-fix":
     parts = [
         clang_tidy,
         "-load",
         str(plugin_path),
         "-checks=-*,east-const-enforcer",
-        *case.clang_tidy_args,
+        *clang_tidy_args,
     ]
-    if "-fix" not in case.clang_tidy_args:
+    if "-fix" not in clang_tidy_args:
       parts.append("-fix")
-    parts.extend([str(source), "--", *base_flags])
+    parts.extend([str(source), "--", *compile_flags])
     return parts
   if case.mode == "clang-tidy-lint":
     return [
@@ -142,10 +173,10 @@ def build_command(case: IntegrationCase, *, tool_path: Path, plugin_path: Path, 
         "-load",
         str(plugin_path),
         "-checks=-*,east-const-enforcer",
-        *case.clang_tidy_args,
+        *clang_tidy_args,
         str(source),
         "--",
-        *base_flags,
+        *compile_flags,
     ]
   raise CaseFailure(f"Unsupported mode '{case.mode}' in case '{case.name}'")
 
@@ -154,9 +185,17 @@ def format_command(cmd: List[str]) -> str:
   return " ".join(shlex.quote(part) for part in cmd)
 
 
-def maybe_write_compile_commands(case: IntegrationCase, tmp_dir: Path, source: Path) -> None:
+def maybe_write_compile_commands(case: IntegrationCase, tmp_dir: Path, source: Path, flags: List[str]) -> None:
   if case.mode.startswith("clang-tidy"):
-    write_compile_commands(tmp_dir, source, case.compile_flags)
+    write_compile_commands(tmp_dir, source, flags)
+
+
+def merge_flags(defaults: List[str], overrides: List[str]) -> List[str]:
+  if not defaults:
+    return list(overrides)
+  if not overrides:
+    return list(defaults)
+  return [*defaults, *overrides]
 
 
 def run_case(
@@ -166,6 +205,7 @@ def run_case(
     tool_path: Path,
     plugin_path: Path,
     clang_tidy: str,
+    config: RunnerConfig,
   verbose: bool,
 ) -> None:
   input_path = fixtures_dir / case.input
@@ -178,8 +218,21 @@ def run_case(
     work_file = tmp_dir / "input.cpp"
     shutil.copyfile(input_path, work_file)
 
-    maybe_write_compile_commands(case, tmp_dir, work_file)
-    cmd = build_command(case, tool_path=tool_path, plugin_path=plugin_path, clang_tidy=clang_tidy, source=work_file)
+    effective_compile_flags = merge_flags(config.default_compile_flags, case.compile_flags)
+    effective_tool_args = merge_flags(config.default_tool_args, case.tool_args)
+    effective_tidy_args = merge_flags(config.default_clang_tidy_args, case.clang_tidy_args)
+
+    maybe_write_compile_commands(case, tmp_dir, work_file, effective_compile_flags)
+    cmd = build_command(
+        case,
+        tool_path=tool_path,
+        plugin_path=plugin_path,
+        clang_tidy=clang_tidy,
+        source=work_file,
+        compile_flags=effective_compile_flags,
+        standalone_args=effective_tool_args,
+        clang_tidy_args=effective_tidy_args,
+    )
     if verbose:
       print(f"[CMD] {format_command(cmd)}")
 
@@ -206,9 +259,14 @@ def parse_args() -> argparse.Namespace:
       help="Optional path to a JSON file describing integration cases (defaults to tests/integration/cases.json)",
   )
   parser.add_argument(
+      "--config",
+      default=None,
+      help="Path to a JSON file with default flags generated during CMake configure.",
+    )
+  parser.add_argument(
       "--clang-tidy",
-      default="clang-tidy",
-      help="Path to the clang-tidy executable (defaults to first clang-tidy on PATH).",
+      default=None,
+      help="Path to the clang-tidy executable (defaults to value from config or clang-tidy on PATH).",
   )
   parser.add_argument(
       "--case",
@@ -239,6 +297,12 @@ def main() -> int:
   fixtures_dir = cases_path.parent / "fixtures"
   cases = load_cases(cases_path)
 
+  runner_config = RunnerConfig.empty()
+  if args.config:
+    config_path = Path(args.config)
+    ensure_artifact(config_path, "integration config")
+    runner_config = load_runner_config(config_path)
+
   if args.list_cases:
     for case in cases:
       print(case.name)
@@ -248,6 +312,14 @@ def main() -> int:
   tool_path = build_dir / "east-const-enforcer"
   ensure_artifact(tool_path, "standalone tool")
   plugin_path = locate_plugin(build_dir)
+
+  clang_tidy_path: str
+  if args.clang_tidy:
+    clang_tidy_path = args.clang_tidy
+  elif runner_config.clang_tidy_path:
+    clang_tidy_path = runner_config.clang_tidy_path
+  else:
+    clang_tidy_path = "clang-tidy"
 
   if args.selected_cases:
     requested = set(args.selected_cases)
@@ -266,7 +338,8 @@ def main() -> int:
           fixtures_dir=fixtures_dir,
           tool_path=tool_path,
           plugin_path=plugin_path,
-          clang_tidy=args.clang_tidy,
+          clang_tidy=clang_tidy_path,
+          config=runner_config,
           verbose=args.verbose,
         )
       print(f"[PASS] {case.name}")

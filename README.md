@@ -11,11 +11,11 @@
 
 ## Build & Test Workflow
 - **Prerequisites:** LLVM/Clang CMake packages (currently targeting the Homebrew installs at `/opt/homebrew/Cellar/llvm/21.1.6/lib/cmake/{llvm,clang}`) and a C++17-capable toolchain.
-- **One-shot script:** Run `./make.sh` to configure (Release build), compile, and execute every CTest target (unit + integration).
+- **One-shot script:** Run `./make.sh` to invoke the `ninja-release` CMake preset (configure + build) and then execute every CTest target (unit + integration).
 - **Manual CMake sequence:**
-  1. `cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/…/cmake/llvm -DClang_DIR=/…/cmake/clang`
-  2. `cmake --build build`
-  3. `ctest --test-dir build --output-on-failure`
+  1. `cmake --preset ninja-release`
+  2. `cmake --build --preset ninja-release`
+  3. `ctest --preset ninja-release`
   4. Optional direct invocation example (with includes adjusted for your LLVM install):
      ```bash
      ./build/east-const-enforcer -fix path/to/file.cpp -- \
@@ -27,6 +27,12 @@
   - The `east-const-tidy` module (built automatically with the regular targets) lives at `build/libeast-const-tidy.dylib` on macOS.
   - Load it with clang-tidy: `clang-tidy -load ./build/libeast-const-tidy.dylib -checks=-*,east-const-enforcer file.cpp -- <compile flags>`.
   - Provide the same compile commands (typically via `compile_commands.json`) that you would supply to the standalone refactoring tool.
+
+### Configuring toolchains
+- The preset references `cmake/toolchains/homebrew-llvm.cmake`. Adjust `LLVM_ROOT` inside that file (or export `LLVM_ROOT` in your environment) to point at a different LLVM/Clang installation.
+- On macOS the toolchain automatically asks `xcrun` for the active SDK so you no longer have to pass `-DCMAKE_OSX_SYSROOT` manually.
+- During configure CMake emits `build/tests/integration/config.json` containing the exact flags the integration harness should pass to compilers (default `-std=c++17` plus every implicit `-isystem` include). Override or extend the defaults via the cache variables `EAST_CONST_INTEGRATION_EXTRA_INCLUDE_DIRS`, `EAST_CONST_INTEGRATION_EXTRA_FLAGS`, `EAST_CONST_INTEGRATION_DEFAULT_TOOL_ARGS`, and `EAST_CONST_INTEGRATION_DEFAULT_TIDY_ARGS`.
+- All CTest integration targets now supply `--config build/tests/integration/config.json`, so the Python runner never probes the host toolchain—everything comes from the values recorded at configure time.
 
 ## Tests to Keep Green
 - **Unit executable:** `./build/east-const-enforcer-test` (the suites above)

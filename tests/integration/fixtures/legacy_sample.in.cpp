@@ -1,4 +1,7 @@
-#include <string>
+struct SampleString {
+    SampleString(const char* v) : value(v) {}
+    const char* value;
+};
 
 int main() {
     {
@@ -13,11 +16,11 @@ int main() {
     }
 
     {
-        const std::string str = "Hello";
-        const std::string* ptr1 = &str;
-        const std::string &ref4 = str;
-        const std::string & ref5 = str;
-        const std::string& ref6 = str;
+        const SampleString str = "Hello";
+        const SampleString* ptr1 = &str;
+        const SampleString &ref4 = str;
+        const SampleString & ref5 = str;
+        const SampleString& ref6 = str;
     }
 
     {

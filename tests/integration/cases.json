@@ -22,5 +22,13 @@
     "expected": "clang_tidy_fix.in.cpp",
     "compile_flags": ["-std=c++17"],
     "expect_stdout_contains": ["warning: move qualifier east of the declarator"]
+  },
+  {
+    "name": "standalone_legacy_sample",
+    "mode": "standalone-fix",
+    "input": "legacy_sample.in.cpp",
+    "expected": "legacy_sample.expected.cpp",
+    "compile_flags": ["-std=c++17"],
+    "tool_args": ["-quiet"]
   }
 ]

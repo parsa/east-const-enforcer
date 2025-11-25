@@ -1,0 +1,56 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "ninja-release",
+      "displayName": "Ninja Release",
+      "hidden": false,
+      "generator": "Ninja",
+      "binaryDir": "build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "toolchainFile": "cmake/toolchains/homebrew-llvm.cmake"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ninja-release",
+      "configurePreset": "ninja-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "ninja-release",
+      "configurePreset": "ninja-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "ninja-release-all",
+      "displayName": "Configure, build, and test (ninja-release)",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "ninja-release"
+        },
+        {
+          "type": "build",
+          "name": "ninja-release"
+        },
+        {
+          "type": "test",
+          "name": "ninja-release"
+        }
+      ]
+    }
+  ]
+}
