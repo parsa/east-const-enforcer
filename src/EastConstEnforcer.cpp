@@ -1,353 +1,421 @@
-#include <clang/AST/ASTContext.h>
-#include <clang/ASTMatchers/ASTMatchFinder.h>
-#include <clang/ASTMatchers/ASTMatchers.h>
-#include <clang/Basic/Diagnostic.h>
-#include <clang/Frontend/FrontendActions.h>
-#include <clang/Tooling/CommonOptionsParser.h>
-#include <clang/Tooling/Refactoring.h>
-#include <clang/Tooling/Tooling.h>
-#include <llvm/Support/CommandLine.h>
+#include <EastConstEnforcer.h>
+
+#include <clang/Lex/Lexer.h>
+#include <llvm/Support/Error.h>
+#include <llvm/Support/raw_ostream.h>
+
+#include <cctype>
 #include <cstddef>
 #include <string>
-#include <regex>
 
 using namespace clang;
-using namespace clang::ast_matchers;
 using namespace clang::tooling;
 using namespace llvm;
 
 // Command line options
-static cl::OptionCategory EastConstCategory("east-const-enforcer options");
-static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
-static cl::opt<bool> FixErrors("fix", cl::desc("Apply fixes to diagnosed warnings"), cl::cat(EastConstCategory));
-static cl::opt<bool> QuietMode("quiet", cl::desc("Suppress informational output"), 
-                              cl::cat(EastConstCategory));
+cl::OptionCategory EastConstCategory("east-const-enforcer options");
+cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
+cl::opt<bool> FixErrors("fix", cl::desc("Apply fixes to diagnosed warnings"),
+                        cl::cat(EastConstCategory));
+cl::opt<bool> QuietMode("quiet", cl::desc("Suppress informational output"),
+                        cl::cat(EastConstCategory));
 
-struct EastConstChecker : public MatchFinder::MatchCallback {
-  EastConstChecker(RefactoringTool& Tool) : Tool(Tool) {}
+EastConstChecker::EastConstChecker(RefactoringTool &Tool) : Tool(Tool) {}
 
-  void run(const MatchFinder::MatchResult &Result) override {
-    const auto *VD = Result.Nodes.getNodeAs<VarDecl>("varDecl");
-    if (!VD) return;
-    
-    SourceManager &SM = *Result.SourceManager;
-    
-    // Skip variables in system headers or non-main files
-    if (SM.isInSystemHeader(VD->getLocation()) || !SM.isInMainFile(VD->getLocation())) {
+void EastConstChecker::run(const MatchFinder::MatchResult &Result) {
+  if (!Result.Context || !Result.SourceManager)
+    return;
+
+  SourceManager &SM = *Result.SourceManager;
+  const LangOptions &LangOpts = Result.Context->getLangOpts();
+
+  const auto *Var = Result.Nodes.getNodeAs<VarDecl>("varDecl");
+  if (!Var)
+    Var = Result.Nodes.getNodeAs<VarDecl>("constVar");
+  if (Var)
+    processDeclaratorDecl(Var, SM, LangOpts);
+
+  if (const auto *Field = Result.Nodes.getNodeAs<FieldDecl>("fieldDecl"))
+    processDeclaratorDecl(Field, SM, LangOpts);
+
+  if (const auto *Func = Result.Nodes.getNodeAs<FunctionDecl>("functionDecl"))
+    processFunctionDecl(Func, SM, LangOpts);
+
+  if (const auto *Typedef = Result.Nodes.getNodeAs<TypedefDecl>("typedefDecl"))
+    processTypedefDecl(Typedef, SM, LangOpts);
+
+  if (const auto *Alias = Result.Nodes.getNodeAs<TypeAliasDecl>("aliasDecl"))
+    processTypedefDecl(Alias, SM, LangOpts);
+
+  if (const auto *NTTP =
+          Result.Nodes.getNodeAs<NonTypeTemplateParmDecl>(
+              "nonTypeTemplateParm"))
+    processDeclaratorDecl(NTTP, SM, LangOpts);
+}
+
+void EastConstChecker::processDeclaratorDecl(const DeclaratorDecl *DD,
+                                             SourceManager &SM,
+                                             const LangOptions &LangOpts) {
+  if (!DD)
+    return;
+
+  SourceLocation Loc = DD->getLocation();
+  if (Loc.isInvalid() || Loc.isMacroID())
+    return;
+
+  if (SM.isInSystemHeader(Loc) || !SM.isWrittenInMainFile(Loc))
+    return;
+
+  if (TypeSourceInfo *TSI = DD->getTypeSourceInfo())
+    processTypeLoc(TSI->getTypeLoc(), SM, LangOpts);
+}
+
+void EastConstChecker::processTypedefDecl(const TypedefNameDecl *TD,
+                                          SourceManager &SM,
+                                          const LangOptions &LangOpts) {
+  if (!TD)
+    return;
+
+  SourceLocation Loc = TD->getLocation();
+  if (Loc.isInvalid() || Loc.isMacroID())
+    return;
+
+  if (SM.isInSystemHeader(Loc) || !SM.isWrittenInMainFile(Loc))
+    return;
+
+  if (TypeSourceInfo *TSI = TD->getTypeSourceInfo())
+    processTypeLoc(TSI->getTypeLoc(), SM, LangOpts);
+}
+
+void EastConstChecker::processFunctionDecl(const FunctionDecl *FD,
+                                           SourceManager &SM,
+                                           const LangOptions &LangOpts) {
+  if (!FD)
+    return;
+
+  SourceLocation Loc = FD->getLocation();
+  if (Loc.isInvalid() || Loc.isMacroID())
+    return;
+
+  if (SM.isInSystemHeader(Loc) || !SM.isWrittenInMainFile(Loc))
+    return;
+
+  if (TypeSourceInfo *TSI = FD->getTypeSourceInfo()) {
+    TypeLoc TL = TSI->getTypeLoc();
+    if (auto FnTL = TL.getAs<FunctionTypeLoc>()) {
+      processTypeLoc(FnTL.getReturnLoc(), SM, LangOpts);
+      bool SkipParams = FD->isThisDeclarationADefinition();
+      if (!SkipParams) {
+        for (unsigned I = 0; I < FnTL.getNumParams(); ++I)
+          processDeclaratorDecl(FnTL.getParam(I), SM, LangOpts);
+      }
       return;
     }
-    
-    ASTContext &Context = *Result.Context;
-    const LangOptions &LangOpts = Context.getLangOpts();
-    
-    bool isMainFile = SM.isInMainFile(VD->getLocation());
-    llvm::errs() << "Found var: " << VD->getNameAsString() 
-                 << " in file: " << SM.getFilename(VD->getLocation()).str()
-                 << " isMainFile: " << (isMainFile ? "true" : "false") << "\n";
-    
-    if (!isMainFile) return;
+  }
 
-    QualType QT = VD->getType();
-    
-    // Check for const qualifier in the type or pointee/referenced type
-    bool hasConst = QT.isConstQualified();
-    if (QT->isPointerType()) {
-      // For pointers, check if the pointee type is const-qualified
-      hasConst = hasConst || QT->getPointeeType().isConstQualified();
-    } else if (QT->isReferenceType()) {
-      // For references, check if the referenced type is const-qualified
-      hasConst = hasConst || QT->getPointeeType().isConstQualified();
+  // Fallback: process parameter declarations directly.
+  if (!FD->isThisDeclarationADefinition()) {
+    for (const ParmVarDecl *Param : FD->parameters())
+      processDeclaratorDecl(Param, SM, LangOpts);
+  }
+}
+
+void EastConstChecker::processTypeLoc(TypeLoc TL, SourceManager &SM,
+                                      const LangOptions &LangOpts) {
+  for (TypeLoc Current = TL; !Current.isNull();
+       Current = Current.getNextTypeLoc()) {
+    SourceLocation Begin = Current.getBeginLoc();
+    if (Begin.isInvalid())
+      continue;
+
+    SourceLocation FileBegin = SM.getFileLoc(Begin);
+    if (FileBegin.isInvalid() || FileBegin.isMacroID())
+      continue;
+
+    if (!SM.isWrittenInMainFile(FileBegin))
+      continue;
+
+    if (auto QualTL = Current.getAs<QualifiedTypeLoc>())
+      processQualifiedTypeLoc(QualTL, SM, LangOpts);
+
+    if (auto TemplateTL = Current.getAs<TemplateSpecializationTypeLoc>()) {
+      for (unsigned I = 0; I < TemplateTL.getNumArgs(); ++I) {
+        TemplateArgumentLoc ArgLoc = TemplateTL.getArgLoc(I);
+        if (!ArgLoc.getTypeSourceInfo()) {
+          if (!QuietMode) {
+            llvm::errs() << "Missing type source info for template argument at "
+                         << ArgLoc.getSourceRange().printToString(SM) << "\n";
+          }
+          continue;
+        }
+        processTypeLoc(ArgLoc.getTypeSourceInfo()->getTypeLoc(), SM,
+                       LangOpts);
+      }
     }
-    if (!hasConst) return;
+  }
+}
 
+void EastConstChecker::processQualifiedTypeLoc(QualifiedTypeLoc QTL,
+                                               SourceManager &SM,
+                                               const LangOptions &LangOpts) {
+  if (QTL.isNull())
+    return;
+
+  Qualifiers Quals = QTL.getType().getLocalQualifiers();
+  if (!Quals.hasConst() && !Quals.hasVolatile() && !Quals.hasRestrict())
+    return;
+
+  TypeLoc Unqualified = QTL.getUnqualifiedLoc();
+  if (Unqualified.isNull())
+    return;
+
+  QualType BaseQT = Unqualified.getType();
+  if (BaseQT->isAnyPointerType() || BaseQT->isReferenceType() ||
+      BaseQT->isMemberPointerType() || BaseQT->isFunctionPointerType() ||
+      BaseQT->isFunctionProtoType() || BaseQT->isFunctionNoProtoType() ||
+      BaseQT->isArrayType()) {
+    // Pointers, references, and similar declarator-based qualifiers are
+    // already east of the base type, so skip rewriting to avoid duplicates.
+    return;
+  }
+
+  SourceLocation BaseBegin = SM.getFileLoc(Unqualified.getBeginLoc());
+  SourceLocation BaseEnd = SM.getFileLoc(Unqualified.getEndLoc());
+  if (BaseBegin.isInvalid() || BaseEnd.isInvalid())
+    return;
+  if (BaseBegin.isMacroID() || BaseEnd.isMacroID())
+    return;
+  if (!SM.isWrittenInMainFile(BaseBegin) || !SM.isWrittenInMainFile(BaseEnd))
+    return;
+
+  SourceLocation QualBegin;
+  std::vector<std::string> MovedQualifiers;
+  if (!findQualifierRange(QTL, SM, QualBegin, MovedQualifiers)) {
     if (!QuietMode) {
-      llvm::errs() << "Processing variable: " << VD->getNameAsString() << "\n";
+      llvm::errs() << "Failed to find qualifier range for type '"
+                   << QTL.getType().getAsString() << "' at "
+                   << Unqualified.getSourceRange().printToString(SM) << "\n";
     }
+    return;
+  }
 
-    llvm::errs() << "Processing variable: " << VD->getNameAsString() 
-                 << " Type: " << QT.getAsString() 
-                 << " isPointer: " << (QT->isPointerType() ? "yes" : "no") << "\n";
+  unsigned QualKey = QualBegin.getRawEncoding();
+  if (!ProcessedQualifierStarts.insert(QualKey).second)
+    return;
 
-    // Get the source text before the variable name
-    SourceLocation VarLoc = VD->getLocation();
-    SourceLocation TypeStart = VD->getBeginLoc();
-    
-    StringRef Text = Lexer::getSourceText(
-        CharSourceRange::getCharRange(TypeStart, VarLoc),
-        SM, LangOpts);
-    
-    llvm::errs() << "Variable: " << VD->getNameAsString() 
-                << " Declaration prefix: '" << Text.trim() << "'\n";
-    
-    // Check if the variable is in west-const style by examining QT's string and comparing with prefix
-    // This is more reliable than just checking for "const" at the beginning
-    std::string TypeStr = QT.getAsString();
-    
-    // Check if it's a pointer type with west-const style
-    bool isWestConst = false;
-    if (QT->isPointerType()) {
-        // For pointers with const pointee (const int*)
-        isWestConst = Text.trim().starts_with("const") && 
-                      QT->getPointeeType().isConstQualified();
-    } else if (QT->isReferenceType()) {
-        // For references with const referenced type (const int&)
-        isWestConst = Text.trim().starts_with("const") && 
-                      QT->getPointeeType().isConstQualified();
-    } else {
-        // For non-pointers/references (const int)
-        isWestConst = Text.trim().starts_with("const") && 
-                      QT.isConstQualified();
+  CharSourceRange RemoveRange =
+      CharSourceRange::getCharRange(QualBegin, BaseBegin);
+  addReplacement(SM, RemoveRange, "");
+
+  SourceLocation InsertLoc =
+      computeInsertLocation(QTL.getUnqualifiedLoc(), SM, LangOpts);
+  if (InsertLoc.isInvalid())
+    return;
+
+  std::string Suffix = buildQualifierSuffix(MovedQualifiers);
+  if (Suffix.empty())
+    return;
+
+  CharSourceRange InsertRange =
+      CharSourceRange::getCharRange(InsertLoc, InsertLoc);
+  addReplacement(SM, InsertRange, Suffix);
+}
+
+bool EastConstChecker::findQualifierRange(
+    QualifiedTypeLoc QTL, SourceManager &SM, SourceLocation &QualBegin,
+    std::vector<std::string> &MovedQualifiers) const {
+  TypeLoc Unqualified = QTL.getUnqualifiedLoc();
+  if (Unqualified.isNull())
+    return false;
+
+  SourceLocation BaseBegin = SM.getFileLoc(Unqualified.getBeginLoc());
+  if (BaseBegin.isInvalid() || BaseBegin.isMacroID())
+    return false;
+
+  FileID FID = SM.getFileID(BaseBegin);
+  if (FID.isInvalid())
+    return false;
+
+  bool Invalid = false;
+  StringRef Buffer = SM.getBufferData(FID, &Invalid);
+  if (Invalid)
+    return false;
+
+  const char *BufferStart = Buffer.data();
+  const char *BasePtr = SM.getCharacterData(BaseBegin);
+  const char *Cursor = BasePtr;
+
+  auto isIdentifierChar = [](char C) {
+    unsigned char UC = static_cast<unsigned char>(C);
+    return std::isalnum(UC) || C == '_';
+  };
+
+  auto skipWhitespace = [&](const char *&Ptr) {
+    while (Ptr > BufferStart &&
+           std::isspace(static_cast<unsigned char>(Ptr[-1])))
+      --Ptr;
+  };
+
+  Qualifiers Remaining = QTL.getType().getLocalQualifiers();
+  bool FoundAny = false;
+
+  struct QualToken {
+    SourceLocation Loc;
+    std::string Keyword;
+  };
+
+  std::vector<QualToken> Tokens;
+
+  auto matchKeyword = [&](StringRef Keyword) -> bool {
+    if (Keyword.empty())
+      return false;
+
+    const char *Ptr = Cursor;
+    skipWhitespace(Ptr);
+    if (Ptr - Keyword.size() < BufferStart)
+      return false;
+
+    const char *WordStart = Ptr - Keyword.size();
+    if (StringRef(WordStart, Keyword.size()) != Keyword)
+      return false;
+
+    if (WordStart > BufferStart && isIdentifierChar(WordStart[-1]))
+      return false;
+
+    if (Ptr < BasePtr && isIdentifierChar(*Ptr))
+      return false;
+
+    ptrdiff_t Offset = BasePtr - WordStart;
+    SourceLocation TokenLoc =
+        BaseBegin.getLocWithOffset(-static_cast<int>(Offset));
+    Tokens.push_back({TokenLoc, Keyword.str()});
+    Cursor = WordStart;
+    FoundAny = true;
+    return true;
+  };
+
+  bool Progress = true;
+  while (Progress) {
+    Progress = false;
+    if (Remaining.hasConst() && matchKeyword("const")) {
+      Remaining.removeConst();
+      Progress = true;
+      continue;
     }
-
-    if (isWestConst) {
-      SourceLocation ConstLoc = TypeStart;
-      
-      DiagnosticsEngine &DE = Result.Context->getDiagnostics();
-      unsigned DiagID = DE.getCustomDiagID(
-          DiagnosticsEngine::Warning,
-          "use east const style (place 'const' after the type)");
-
-      auto Diag = DE.Report(ConstLoc, DiagID);
-
-      // Instead of getting just the type range, get the full declaration range
-      // from the 'const' token to the end of type
-      SourceRange TypeRange = VD->getTypeSourceInfo()->getTypeLoc().getSourceRange();
-      // Create a new range that includes the 'const' at the beginning
-      SourceRange FullRange(TypeStart, TypeRange.getEnd());
-      
-      std::string FullTypeText = Lexer::getSourceText(
-          CharSourceRange::getTokenRange(FullRange),
-          SM, LangOpts).str();
-          
-      llvm::errs() << "Full type text: '" << FullTypeText << "'\n";
-
-      try {
-        // Declare NewType at a higher scope so it's available for debugging
-        std::string NewType;
-        
-        // Create a fix-it hint
-        if (QT->isPointerType()) {
-          // For pointer types, move "const" before the "*"
-          NewType = std::regex_replace(FullTypeText,
-                                    std::regex("const\\s+(\\w+)\\s*(\\*+)"), 
-                                    "$1 const$2");
-        } else if (QT->isReferenceType()) {
-          // For reference types, move "const" before the "&"
-          NewType = std::regex_replace(FullTypeText,
-                                    std::regex("const\\s+(\\w+)\\s*(&)"), 
-                                    "$1 const$2");
-        } else {
-          // For non-pointer types, move "const" to the end
-          NewType = std::regex_replace(FullTypeText, 
-                                    std::regex("const\\s+([^\\s]+)"), 
-                                    "$1 const");
-        }
-        
-        llvm::errs() << "After regex: Variable: " << VD->getNameAsString() << "\n";
-        llvm::errs() << "  Original: '" << FullTypeText << "'\n";
-        llvm::errs() << "  NewType:  '" << NewType << "'\n";
-        llvm::errs() << "  Changed:  " << (NewType != FullTypeText ? "yes" : "no") << "\n";
-        
-        if (NewType != FullTypeText) {
-          // Create a replacement
-          Replacement Rep(SM, CharSourceRange::getTokenRange(FullRange), NewType);
-          
-          // Add to diagnostics for display purposes
-          Diag << FixItHint::CreateReplacement(
-              CharSourceRange::getTokenRange(FullRange),
-              NewType);
-              
-          // Also add to the tool's replacement map for actual application
-          std::string FilePath = SM.getFilename(FullRange.getBegin()).str();
-          auto &FileReplaces = Tool.getReplacements()[FilePath];
-          llvm::consumeError(FileReplaces.add(Rep));
-          
-          llvm::errs() << "Added replacement for " << FilePath << "\n"; 
-        }
-      } catch (const std::regex_error& e) {
-        llvm::errs() << "Regex error: " << e.what() << "\n";
-      }
+    if (Remaining.hasVolatile() && matchKeyword("volatile")) {
+      Remaining.removeVolatile();
+      Progress = true;
+      continue;
     }
-
-    if (QT->isReferenceType() || QT->isPointerType()) {
-      // Get the qualified type locations
-      TypeLoc TL = VD->getTypeSourceInfo()->getTypeLoc();
-      
-      // For pointers and references with const pointee
-      if (const PointerTypeLoc PTL = TL.getAs<PointerTypeLoc>()) {
-        TypeLoc PointeeTL = PTL.getPointeeLoc();
-        // Find the const qualifier's exact location
-        if (auto QualTL = PointeeTL.getAs<QualifiedTypeLoc>()) {
-          SourceRange QualRange = QualTL.getSourceRange();
-          // Now we have the exact location of the 'const' token
-        }
-      }
-      // Handle references
-      else if (const ReferenceTypeLoc RTL = TL.getAs<ReferenceTypeLoc>()) {
-        TypeLoc PointeeTL = RTL.getPointeeLoc();
-        // Find the const qualifier's exact location
-        if (auto QualTL = PointeeTL.getAs<QualifiedTypeLoc>()) {
-          SourceRange QualRange = QualTL.getSourceRange();
-          
-          // Get the base type (without qualifiers)
-          QualType BaseType = QualTL.getUnqualifiedLoc().getType();
-          std::string BaseTypeStr = BaseType.getAsString();
-          
-          // Get the reference location
-          SourceLocation RefLoc = RTL.getLocalSourceRange().getBegin();
-          
-          // Create a diagnostic
-          DiagnosticsEngine &DE = Result.Context->getDiagnostics();
-          unsigned DiagID = DE.getCustomDiagID(
-              DiagnosticsEngine::Warning,
-              "use east const style (place 'const' after the type)");
-          
-          auto Diag = DE.Report(QualRange.getBegin(), DiagID);
-          
-          // Create the replacement: [base_type] const&
-          std::string NewTypeStr = BaseTypeStr + " const" + 
-                                  Lexer::getSourceText(
-                                      CharSourceRange::getCharRange(RefLoc, RefLoc.getLocWithOffset(1)),
-                                      SM, LangOpts).str();
-          
-          // Get the full range from the beginning of const qualifier to after the &
-          SourceRange FullRange(QualRange.getBegin(), RefLoc.getLocWithOffset(1));
-          
-          // Add the fix-it hint
-          Diag << FixItHint::CreateReplacement(
-              CharSourceRange::getTokenRange(FullRange),
-              NewTypeStr);
-              
-          // Also add to the tool's replacement map
-          std::string FilePath = SM.getFilename(FullRange.getBegin()).str();
-          Replacement Rep(SM, CharSourceRange::getTokenRange(FullRange), NewTypeStr);
-          auto &FileReplaces = Tool.getReplacements()[FilePath];
-          llvm::consumeError(FileReplaces.add(Rep));
-          
-          llvm::errs() << "Added AST-based replacement for reference type in " << FilePath << "\n";
-        }
-      }
-      // For simple types
-      if (auto QualTL = TL.getAs<QualifiedTypeLoc>()) {
-        SourceRange QualRange = QualTL.getSourceRange();
-        QualType BaseType = QualTL.getUnqualifiedLoc().getType();
-        std::string BaseTypeStr = BaseType.getAsString();
-        
-        // Create a replacement with the const after the type
-        std::string NewTypeStr = BaseTypeStr + " const";
-        
-        // Apply the replacement
-        // Create a diagnostic
-        DiagnosticsEngine &DE = Result.Context->getDiagnostics();
-        unsigned DiagID = DE.getCustomDiagID(
-            DiagnosticsEngine::Warning,
-            "use east const style (place 'const' after the type)");
-        
-        auto Diag = DE.Report(QualRange.getBegin(), DiagID);
-        
-        // Get the full range from the beginning of const qualifier to after the type
-        SourceRange FullRange(QualRange.getBegin(), QualRange.getEnd());
-        
-        // Add the fix-it hint
-        Diag << FixItHint::CreateReplacement(
-            CharSourceRange::getTokenRange(FullRange),
-            NewTypeStr);
-            
-        // Also add to the tool's replacement map
-        std::string FilePath = SM.getFilename(FullRange.getBegin()).str();
-        Replacement Rep(SM, CharSourceRange::getTokenRange(FullRange), NewTypeStr);
-        auto &FileReplaces = Tool.getReplacements()[FilePath];
-        llvm::consumeError(FileReplaces.add(Rep));
-        
-        llvm::errs() << "Added AST-based replacement for simple type in " << FilePath << "\n";
-      }
+    if (Remaining.hasRestrict() && matchKeyword("restrict")) {
+      Remaining.removeRestrict();
+      Progress = true;
+      continue;
     }
   }
 
-private:
-  RefactoringTool &Tool;
-};
+  if (!FoundAny)
+    return false;
 
-int main(int argc, const char **argv) {
-  auto ExpectedParser = CommonOptionsParser::create(argc, argv, EastConstCategory);
-  if (!ExpectedParser) {
-    llvm::errs() << ExpectedParser.takeError();
-    return 1;
-  }
-  CommonOptionsParser& OptionsParser = ExpectedParser.get();
-  
-  // Create the tool with the proper options
-  RefactoringTool Tool(OptionsParser.getCompilations(),
-                      OptionsParser.getSourcePathList());
-  
-  if (FixErrors) {
-    llvm::errs() << "Fix mode enabled\n";
-  }
-  
-  EastConstChecker Checker(Tool);
-  MatchFinder Finder;
+  if (Tokens.empty())
+    return false;
 
-  // Match variable declarations
-  auto VarMatcher = varDecl(unless(parmVarDecl())).bind("varDecl");
-  Finder.addMatcher(VarMatcher, &Checker);
+  std::reverse(Tokens.begin(), Tokens.end());
 
-  // Create custom factory
-  auto Factory = newFrontendActionFactory(&Finder);
-  
-  int Result = Tool.run(Factory.get());
-  
-  if (FixErrors) {
-    // Get the replacements map
-    auto &ReplacementsMap = Tool.getReplacements();
-    
-    // Remove any entries with empty file paths
-    ReplacementsMap.erase("");
-    
-    // Apply the replacements to each file
-    llvm::errs() << "Applying fixes to " << ReplacementsMap.size() << " files\n";
-    
-    for (const auto &FileAndReplacements : ReplacementsMap) {
-      const std::string &FilePath = FileAndReplacements.first;
-      const Replacements &Replaces = FileAndReplacements.second;
-      
-      llvm::errs() << "Processing file: " << FilePath << " with "
-                   << Replaces.size() << " replacements\n";
-      
-      // Read the file content using LLVM's file system functions
-      auto FileOrError = llvm::MemoryBuffer::getFile(FilePath);
-      if (std::error_code EC = FileOrError.getError()) {
-        llvm::errs() << "Error reading file " << FilePath << ": " << EC.message() << "\n";
-        continue;
-      }
-      
-      std::string FileContent = FileOrError.get()->getBuffer().str();
-      
-      // Apply replacements to the file content
-      llvm::Expected<std::string> NewContent = applyAllReplacements(FileContent, Replaces);
-      if (!NewContent) {
-        llvm::errs() << "Error applying replacements to " << FilePath << ": "
-                     << llvm::toString(NewContent.takeError()) << "\n";
-        continue;
-      }
-      
-      // Write the modified content back to the file
-      std::error_code EC;
-      llvm::raw_fd_ostream OS(FilePath, EC, llvm::sys::fs::OF_None);
-      if (EC) {
-        llvm::errs() << "Error opening file for writing " << FilePath << ": " << EC.message() << "\n";
-        continue;
-      }
-      
-      OS << *NewContent;
-      OS.close();
-      
-      if (OS.has_error()) {
-        llvm::errs() << "Error writing to " << FilePath << "\n";
-      } else {
-        llvm::errs() << "Successfully modified: " << FilePath << "\n";
-      }
-    }
+  auto FirstConst =
+      std::find_if(Tokens.begin(), Tokens.end(), [](const QualToken &Tok) {
+        return Tok.Keyword == "const";
+      });
+
+  if (FirstConst == Tokens.end())
+    return false;
+
+  QualBegin = FirstConst->Loc;
+  for (auto It = FirstConst; It != Tokens.end(); ++It)
+    MovedQualifiers.push_back(It->Keyword);
+
+  return true;
+}
+
+std::string EastConstChecker::getSourceText(const SourceManager &SM,
+																						const LangOptions &LangOpts,
+																						CharSourceRange Range) const {
+	if (Range.isInvalid())
+		return {};
+	return Lexer::getSourceText(Range, SM, LangOpts).str();
+}
+
+std::string EastConstChecker::buildQualifierSuffix(
+    const std::vector<std::string> &Qualifiers) const {
+  if (Qualifiers.empty())
+    return {};
+
+  std::string Result;
+  for (const std::string &Keyword : Qualifiers) {
+    Result += " ";
+    Result += Keyword;
   }
-  
   return Result;
+}
+
+void EastConstChecker::addReplacement(const SourceManager &SM,
+																			CharSourceRange Range,
+																			llvm::StringRef NewText) {
+	if (Range.isInvalid())
+		return;
+
+	SourceLocation Loc = Range.getBegin();
+	if (Loc.isInvalid())
+		return;
+
+	std::string FilePath = SM.getFilename(Loc).str();
+	if (FilePath.empty())
+		return;
+
+	Replacement Rep(SM, Range, NewText);
+	auto &FileReplacements = Tool.getReplacements()[FilePath];
+	llvm::Error Err = FileReplacements.add(Rep);
+	if (Err) {
+		if (!QuietMode) {
+			llvm::errs() << "Error adding replacement to " << FilePath << ": "
+									 << llvm::toString(std::move(Err)) << "\n";
+		}
+	} else if (!QuietMode && !NewText.empty()) {
+		llvm::errs() << "Inserted qualifier suffix '" << NewText << "' in "
+								 << FilePath << "\n";
+	}
+}
+
+SourceLocation EastConstChecker::computeInsertLocation(TypeLoc Unqualified,
+                                                       SourceManager &SM,
+                                                       const LangOptions &LangOpts) const {
+  if (Unqualified.isNull())
+    return SourceLocation();
+
+  SourceLocation BaseBegin = SM.getFileLoc(Unqualified.getBeginLoc());
+  SourceLocation BaseEnd = SM.getFileLoc(Unqualified.getEndLoc());
+  if (BaseBegin.isInvalid() || BaseEnd.isInvalid())
+    return SourceLocation();
+
+  CharSourceRange BaseRange =
+      CharSourceRange::getTokenRange(BaseBegin, BaseEnd);
+  std::string BaseText = getSourceText(SM, LangOpts, BaseRange);
+  if (BaseText.empty())
+    return Lexer::getLocForEndOfToken(BaseEnd, 0, SM, LangOpts);
+
+  int Depth = 0;
+  for (size_t I = 0; I < BaseText.size(); ++I) {
+    char C = BaseText[I];
+    if (C == '<') {
+      ++Depth;
+      continue;
+    }
+    if (C == '>') {
+      if (Depth == 0)
+        return BaseBegin.getLocWithOffset(static_cast<int>(I));
+      --Depth;
+    }
+  }
+
+  return Lexer::getLocForEndOfToken(BaseEnd, 0, SM, LangOpts);
 }
