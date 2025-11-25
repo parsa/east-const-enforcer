@@ -4,6 +4,7 @@
 #include <llvm/Support/Error.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <string>
@@ -196,6 +197,70 @@ void EastConstChecker::processTypeLoc(TypeLoc TL, SourceManager &SM,
   }
 }
 
+namespace {
+bool tokenMatchesIdentifier(const Token &Tok, llvm::StringRef Name) {
+  if (!Tok.isOneOf(tok::identifier, tok::raw_identifier))
+    return false;
+  return llvm::StringRef(Tok.getLiteralData(), Tok.getLength()) == Name;
+}
+
+bool isIgnorableSpecifierToken(const Token &Tok) {
+  tok::TokenKind Kind = Tok.getKind();
+  switch (Kind) {
+  case tok::kw_constexpr:
+  case tok::kw_consteval:
+  case tok::kw_constinit:
+  case tok::kw_static:
+  case tok::kw_inline:
+  case tok::kw_extern:
+  case tok::kw_register:
+  case tok::kw_thread_local:
+  case tok::kw_mutable:
+  case tok::kw_friend:
+  case tok::kw_typedef:
+    return true;
+  default:
+    break;
+  }
+
+  return tokenMatchesIdentifier(Tok, "constexpr") ||
+         tokenMatchesIdentifier(Tok, "consteval") ||
+         tokenMatchesIdentifier(Tok, "constinit") ||
+         tokenMatchesIdentifier(Tok, "static") ||
+         tokenMatchesIdentifier(Tok, "inline") ||
+         tokenMatchesIdentifier(Tok, "extern") ||
+         tokenMatchesIdentifier(Tok, "register") ||
+         tokenMatchesIdentifier(Tok, "thread_local") ||
+         tokenMatchesIdentifier(Tok, "mutable") ||
+         tokenMatchesIdentifier(Tok, "friend") ||
+         tokenMatchesIdentifier(Tok, "typedef");
+}
+
+bool isConstToken(const Token &Tok) {
+  if (Tok.is(tok::kw_const))
+    return true;
+  return tokenMatchesIdentifier(Tok, "const") ||
+         tokenMatchesIdentifier(Tok, "__const") ||
+         tokenMatchesIdentifier(Tok, "__const__");
+}
+
+bool isVolatileToken(const Token &Tok) {
+  if (Tok.is(tok::kw_volatile))
+    return true;
+  return tokenMatchesIdentifier(Tok, "volatile") ||
+         tokenMatchesIdentifier(Tok, "__volatile") ||
+         tokenMatchesIdentifier(Tok, "__volatile__");
+}
+
+bool isRestrictToken(const Token &Tok) {
+  if (Tok.is(tok::kw_restrict))
+    return true;
+  return tokenMatchesIdentifier(Tok, "restrict") ||
+         tokenMatchesIdentifier(Tok, "__restrict") ||
+         tokenMatchesIdentifier(Tok, "__restrict__");
+}
+} // namespace
+
 void EastConstChecker::processQualifiedTypeLoc(QualifiedTypeLoc QTL,
                                                SourceManager &SM,
                                                const LangOptions &LangOpts) {
@@ -263,7 +328,8 @@ void EastConstChecker::processQualifiedTypeLoc(QualifiedTypeLoc QTL,
       return;
     }
   } else {
-    if (!findQualifierRange(QTL, SM, QualBegin, MovedQualifiers)) {
+    if (!findQualifierRange(QTL, SM, LangOpts, QualBegin, RemovalEnd,
+                            MovedQualifiers)) {
       if (!QuietMode) {
         llvm::errs() << "Failed to find qualifier range for type '"
                      << QTL.getType().getAsString() << "' at "
@@ -272,7 +338,6 @@ void EastConstChecker::processQualifiedTypeLoc(QualifiedTypeLoc QTL,
       }
       return;
     }
-    RemovalEnd = BaseBegin;
   }
 
   unsigned QualKey = QualBegin.getRawEncoding();
@@ -303,119 +368,20 @@ void EastConstChecker::processQualifiedTypeLoc(QualifiedTypeLoc QTL,
 }
 
 bool EastConstChecker::findQualifierRange(
-    QualifiedTypeLoc QTL, SourceManager &SM, SourceLocation &QualBegin,
-    std::vector<std::string> &MovedQualifiers) const {
+  QualifiedTypeLoc QTL, SourceManager &SM, const LangOptions &LangOpts,
+  SourceLocation &QualBegin, SourceLocation &RemovalEnd,
+  std::vector<std::string> &MovedQualifiers) const {
   TypeLoc Unqualified = QTL.getUnqualifiedLoc();
   if (Unqualified.isNull())
     return false;
 
   SourceLocation BaseBegin = SM.getFileLoc(Unqualified.getBeginLoc());
-  if (BaseBegin.isInvalid() || BaseBegin.isMacroID())
+  if (BaseBegin.isInvalid())
     return false;
 
-  FileID FID = SM.getFileID(BaseBegin);
-  if (FID.isInvalid())
-    return false;
-
-  bool Invalid = false;
-  StringRef Buffer = SM.getBufferData(FID, &Invalid);
-  if (Invalid)
-    return false;
-
-  const char *BufferStart = Buffer.data();
-  const char *BasePtr = SM.getCharacterData(BaseBegin);
-  const char *Cursor = BasePtr;
-
-  auto isIdentifierChar = [](char C) {
-    unsigned char UC = static_cast<unsigned char>(C);
-    return std::isalnum(UC) || C == '_';
-  };
-
-  auto skipWhitespace = [&](const char *&Ptr) {
-    while (Ptr > BufferStart &&
-           std::isspace(static_cast<unsigned char>(Ptr[-1])))
-      --Ptr;
-  };
-
-  Qualifiers Remaining = QTL.getType().getLocalQualifiers();
-  bool FoundAny = false;
-
-  struct QualToken {
-    SourceLocation Loc;
-    std::string Keyword;
-  };
-
-  std::vector<QualToken> Tokens;
-
-  auto matchKeyword = [&](StringRef Keyword) -> bool {
-    if (Keyword.empty())
-      return false;
-
-    const char *Ptr = Cursor;
-    skipWhitespace(Ptr);
-    if (Ptr - Keyword.size() < BufferStart)
-      return false;
-
-    const char *WordStart = Ptr - Keyword.size();
-    if (StringRef(WordStart, Keyword.size()) != Keyword)
-      return false;
-
-    if (WordStart > BufferStart && isIdentifierChar(WordStart[-1]))
-      return false;
-
-    if (Ptr < BasePtr && isIdentifierChar(*Ptr))
-      return false;
-
-    ptrdiff_t Offset = BasePtr - WordStart;
-    SourceLocation TokenLoc =
-        BaseBegin.getLocWithOffset(-static_cast<int>(Offset));
-    Tokens.push_back({TokenLoc, Keyword.str()});
-    Cursor = WordStart;
-    FoundAny = true;
-    return true;
-  };
-
-  bool Progress = true;
-  while (Progress) {
-    Progress = false;
-    if (Remaining.hasConst() && matchKeyword("const")) {
-      Remaining.removeConst();
-      Progress = true;
-      continue;
-    }
-    if (Remaining.hasVolatile() && matchKeyword("volatile")) {
-      Remaining.removeVolatile();
-      Progress = true;
-      continue;
-    }
-    if (Remaining.hasRestrict() && matchKeyword("restrict")) {
-      Remaining.removeRestrict();
-      Progress = true;
-      continue;
-    }
-  }
-
-  if (!FoundAny)
-    return false;
-
-  if (Tokens.empty())
-    return false;
-
-  std::reverse(Tokens.begin(), Tokens.end());
-
-  auto FirstConst =
-      std::find_if(Tokens.begin(), Tokens.end(), [](const QualToken &Tok) {
-        return Tok.Keyword == "const";
-      });
-
-  if (FirstConst == Tokens.end())
-    return false;
-
-  QualBegin = FirstConst->Loc;
-  for (auto It = FirstConst; It != Tokens.end(); ++It)
-    MovedQualifiers.push_back(It->Keyword);
-
-  return true;
+  return collectQualifierTokens(BaseBegin, SM, LangOpts,
+                                QTL.getType().getLocalQualifiers(), QualBegin,
+                                RemovalEnd, MovedQualifiers);
 }
 
 std::string EastConstChecker::getSourceText(const SourceManager &SM,
@@ -809,19 +775,29 @@ bool EastConstChecker::findQualifierRangeFromSpelling(
     QualifiedTypeLoc QTL, SourceManager &SM, const LangOptions &LangOpts,
     SourceLocation &QualBegin, SourceLocation &RemovalEnd,
     std::vector<std::string> &MovedQualifiers) const {
-  (void)LangOpts;
   Qualifiers Remaining = QTL.getType().getLocalQualifiers();
-  if (!Remaining.hasConst() && !Remaining.hasVolatile() &&
-      !Remaining.hasRestrict())
-    return false;
-
   SourceLocation BaseBegin = SM.getFileLoc(QTL.getBeginLoc());
-  if (BaseBegin.isInvalid() || BaseBegin.isMacroID())
-    return false;
-  if (!SM.isWrittenInMainFile(BaseBegin))
+  if (BaseBegin.isInvalid())
     return false;
 
-  FileID FID = SM.getFileID(BaseBegin);
+  if (!collectQualifierTokens(BaseBegin, SM, LangOpts, Remaining, QualBegin,
+                              RemovalEnd, MovedQualifiers))
+    return false;
+  return true;
+}
+
+bool EastConstChecker::collectQualifierTokens(
+    SourceLocation BaseBegin, SourceManager &SM, const LangOptions &LangOpts,
+    Qualifiers Quals, SourceLocation &QualBegin, SourceLocation &RemovalEnd,
+    std::vector<std::string> &MovedQualifiers) const {
+  if (!Quals.hasConst() && !Quals.hasVolatile() && !Quals.hasRestrict())
+    return false;
+
+  SourceLocation FileBase = SM.getFileLoc(BaseBegin);
+  if (FileBase.isInvalid() || FileBase.isMacroID())
+    return false;
+
+  FileID FID = SM.getFileID(FileBase);
   if (FID.isInvalid())
     return false;
 
@@ -830,101 +806,117 @@ bool EastConstChecker::findQualifierRangeFromSpelling(
   if (Invalid)
     return false;
 
-  const char *BufferStart = Buffer.data();
-  const char *BasePtr = SM.getCharacterData(BaseBegin);
+  const char *FileStart = Buffer.data();
+  const char *FileEnd = Buffer.end();
+  const char *BasePtr = SM.getCharacterData(FileBase);
   if (!BasePtr)
     return false;
 
-  auto isIdentifierChar = [](char C) {
-    unsigned char UC = static_cast<unsigned char>(C);
-    return std::isalnum(UC) || C == '_';
-  };
+  ptrdiff_t Offset = BasePtr - FileStart;
+  ptrdiff_t Lookbehind =
+      std::min<ptrdiff_t>(Offset, static_cast<ptrdiff_t>(2048));
+  const char *LexStartPtr = BasePtr - Lookbehind;
 
-  auto skipWhitespace = [&](const char *&Ptr) {
-    while (Ptr > BufferStart &&
-           std::isspace(static_cast<unsigned char>(Ptr[-1])))
-      --Ptr;
-  };
+  Lexer Lex(SM.getLocForStartOfFile(FID), LangOpts, FileStart, LexStartPtr,
+            FileEnd);
+  Lex.SetCommentRetentionState(true);
 
-  bool FoundAny = false;
+  SourceLocation RemovalBound = FileBase;
+  bool EncounteredMovable = false;
 
-  struct QualToken {
-    SourceLocation Loc;
-    std::string Keyword;
-  };
+  std::vector<Token> Tokens;
+  Token Tok;
+  while (true) {
+    Lex.LexFromRawLexer(Tok);
+    if (Tok.is(tok::eof))
+      break;
 
-  std::vector<QualToken> Tokens;
-
-  const char *Cursor = BasePtr;
-
-  auto matchKeyword = [&](StringRef Keyword) -> bool {
-    if (Keyword.empty())
-      return false;
-
-    const char *Ptr = Cursor;
-    skipWhitespace(Ptr);
-    if (Ptr - Keyword.size() < BufferStart)
-      return false;
-
-    const char *WordStart = Ptr - Keyword.size();
-    if (StringRef(WordStart, Keyword.size()) != Keyword)
-      return false;
-
-    if (WordStart > BufferStart && isIdentifierChar(WordStart[-1]))
-      return false;
-
-    if (Ptr < BasePtr && isIdentifierChar(*Ptr))
-      return false;
-
-    ptrdiff_t Offset = BasePtr - WordStart;
-    SourceLocation TokenLoc =
-        BaseBegin.getLocWithOffset(-static_cast<int>(Offset));
-    Tokens.push_back({TokenLoc, Keyword.str()});
-    Cursor = WordStart;
-    FoundAny = true;
-    return true;
-  };
-
-  bool Progress = true;
-  while (Progress) {
-    Progress = false;
-    if (Remaining.hasConst() && matchKeyword("const")) {
-      Remaining.removeConst();
-      Progress = true;
+    SourceLocation TokLoc = SM.getFileLoc(Tok.getLocation());
+    if (TokLoc.isInvalid() || TokLoc.isMacroID())
       continue;
-    }
-    if (Remaining.hasVolatile() && matchKeyword("volatile")) {
-      Remaining.removeVolatile();
-      Progress = true;
-      continue;
-    }
-    if (Remaining.hasRestrict() && matchKeyword("restrict")) {
-      Remaining.removeRestrict();
-      Progress = true;
-      continue;
-    }
+    if (!SM.isBeforeInTranslationUnit(TokLoc, FileBase))
+      break;
+
+    Tokens.push_back(Tok);
   }
-
-  if (!FoundAny)
-    return false;
 
   if (Tokens.empty())
     return false;
 
-  std::reverse(Tokens.begin(), Tokens.end());
+  struct QualTokenInfo {
+    SourceLocation Loc;
+    std::string Keyword;
+  };
+  std::vector<QualTokenInfo> QualifierTokens;
 
-  auto FirstConst =
-      std::find_if(Tokens.begin(), Tokens.end(), [](const QualToken &Tok) {
-        return Tok.Keyword == "const";
-      });
+  for (auto It = Tokens.rbegin(); It != Tokens.rend(); ++It) {
+    tok::TokenKind Kind = It->getKind();
 
-  if (FirstConst == Tokens.end())
+    if (isConstToken(*It) && Quals.hasConst()) {
+      QualifierTokens.push_back(
+          {SM.getFileLoc(It->getLocation()), "const"});
+      Quals.removeConst();
+      EncounteredMovable = true;
+      continue;
+    }
+
+    if (isVolatileToken(*It) && Quals.hasVolatile()) {
+      QualifierTokens.push_back(
+          {SM.getFileLoc(It->getLocation()), "volatile"});
+      Quals.removeVolatile();
+      EncounteredMovable = true;
+      continue;
+    }
+
+    if (isRestrictToken(*It) && Quals.hasRestrict()) {
+      QualifierTokens.push_back(
+          {SM.getFileLoc(It->getLocation()), "restrict"});
+      Quals.removeRestrict();
+      EncounteredMovable = true;
+      continue;
+    }
+
+    if (Kind == tok::comment || Kind == tok::unknown) {
+      if (!EncounteredMovable)
+        RemovalBound = SM.getFileLoc(It->getLocation());
+      continue;
+    }
+
+    if (isIgnorableSpecifierToken(*It)) {
+      if (!EncounteredMovable)
+        RemovalBound = SM.getFileLoc(It->getLocation());
+      continue;
+    }
+
+    break;
+  }
+
+  if (QualifierTokens.empty())
     return false;
 
-  QualBegin = FirstConst->Loc;
-  RemovalEnd = BaseBegin;
-  for (auto It = FirstConst; It != Tokens.end(); ++It)
-    MovedQualifiers.push_back(It->Keyword);
+  std::reverse(QualifierTokens.begin(), QualifierTokens.end());
+
+  size_t FirstMoveIdx = 0;
+    auto FirstConst = std::find_if(
+      QualifierTokens.begin(), QualifierTokens.end(),
+      [](const QualTokenInfo &Info) { return Info.Keyword == "const"; });
+  if (FirstConst != QualifierTokens.end())
+    FirstMoveIdx = static_cast<size_t>(FirstConst - QualifierTokens.begin());
+
+  QualBegin = QualifierTokens[FirstMoveIdx].Loc;
+  RemovalEnd = RemovalBound;
+
+  const char *QualPtr = SM.getCharacterData(QualBegin);
+  const char *RemovalPtr = SM.getCharacterData(RemovalEnd);
+  if (!QualPtr || !RemovalPtr || RemovalPtr < QualPtr)
+    return false;
+
+  llvm::StringRef Between(QualPtr, RemovalPtr - QualPtr);
+  if (Between.contains('\n'))
+    return false;
+
+  for (size_t I = FirstMoveIdx; I < QualifierTokens.size(); ++I)
+    MovedQualifiers.emplace_back(QualifierTokens[I].Keyword);
 
   return true;
 }

@@ -48,7 +48,9 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 
 # Add test executable
-add_executable(east-const-enforcer-test tests/EastConstEnforcerTest.cpp)
+add_executable(east-const-enforcer-test
+  tests/EastConstEnforcerTest.cpp
+  tests/WesterlyRoundTripTest.cpp)
 target_link_libraries(east-const-enforcer-test PRIVATE
   east-const-lib
   clangTooling

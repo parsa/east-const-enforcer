@@ -17,6 +17,20 @@ namespace std {
 
 using size_t = decltype(sizeof(0));
 
+template <typename T>
+class initializer_list {
+public:
+  initializer_list(const T *data = nullptr, size_t size = 0)
+      : Data(data), Size(size) {}
+  const T *begin() const { return Data; }
+  const T *end() const { return Data + Size; }
+  size_t size() const { return Size; }
+
+private:
+  const T *Data;
+  size_t Size;
+};
+
 class string {
 public:
   string() = default;
@@ -29,6 +43,7 @@ template <typename T>
 class vector {
 public:
   vector() = default;
+  vector(initializer_list<T>) {}
 };
 
 template <typename T>

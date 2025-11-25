@@ -50,7 +50,9 @@ private:
   void processQualifiedTypeLoc(QualifiedTypeLoc QTL, SourceManager &SM,
                                const LangOptions &LangOpts);
   bool findQualifierRange(QualifiedTypeLoc QTL, SourceManager &SM,
+                          const LangOptions &LangOpts,
                           SourceLocation &QualBegin,
+                          SourceLocation &RemovalEnd,
                           std::vector<std::string> &MovedQualifiers) const;
   bool shouldUseSpellingFallback(QualifiedTypeLoc QTL, TypeLoc Unqualified,
                                  SourceManager &SM,
@@ -59,6 +61,11 @@ private:
       QualifiedTypeLoc QTL, SourceManager &SM, const LangOptions &LangOpts,
       SourceLocation &QualBegin, SourceLocation &BaseBegin,
       std::vector<std::string> &MovedQualifiers) const;
+  bool collectQualifierTokens(SourceLocation BaseBegin, SourceManager &SM,
+                              const LangOptions &LangOpts, Qualifiers Quals,
+                              SourceLocation &QualBegin,
+                              SourceLocation &RemovalEnd,
+                              std::vector<std::string> &MovedQualifiers) const;
   bool typeLocNeedsSpellingFallback(TypeLoc TL) const;
   bool isDeclaratorTypeLoc(TypeLoc TL) const;
   bool shouldFixDanglingQualifier(TypeLoc TL) const;
