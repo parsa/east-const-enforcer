@@ -20,7 +20,9 @@ public:
         Checker([this](const SourceManager &, CharSourceRange Range,
                         llvm::StringRef NewText) {
           handleReplacement(Range, NewText);
-        }) {}
+        }) {
+    setQuietMode(true);
+  }
 
   void registerMatchers(MatchFinder *Finder) override {
     registerEastConstMatchers(*Finder, this);
@@ -48,19 +50,18 @@ private:
     auto Builder = diag(Range.getBegin(),
                         "move qualifier east of the declarator");
     if (PendingRemoval) {
-      Builder << FixItHint::CreateReplacement(PendingRemoval->getAsRange(),
-                                              "");
+      Builder << FixItHint::CreateReplacement(*PendingRemoval, "");
       PendingRemoval.reset();
     }
-    Builder << FixItHint::CreateReplacement(Range.getAsRange(), NewText);
+    Builder << FixItHint::CreateReplacement(Range, NewText);
   }
 
   void flushPendingRemoval() {
     if (!PendingRemoval)
       return;
     auto Builder =
-        diag(PendingRemoval->getBegin(), "remove stray qualifier token");
-    Builder << FixItHint::CreateReplacement(PendingRemoval->getAsRange(), "");
+      diag(PendingRemoval->getBegin(), "remove stray qualifier token");
+    Builder << FixItHint::CreateReplacement(*PendingRemoval, "");
     PendingRemoval.reset();
   }
 

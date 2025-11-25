@@ -7,10 +7,8 @@
 #include <clang/ASTMatchers/ASTMatchers.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Frontend/FrontendActions.h>
-#include <clang/Tooling/CommonOptionsParser.h>
 #include <clang/Tooling/Refactoring.h>
 #include <clang/Tooling/Tooling.h>
-#include <llvm/Support/CommandLine.h>
 
 #include <llvm/ADT/DenseSet.h>
 
@@ -24,15 +22,12 @@ using namespace clang::ast_matchers;
 using namespace clang::tooling;
 using namespace llvm;
 
-// Command line options
-extern cl::OptionCategory EastConstCategory;
-extern cl::extrahelp CommonHelp;
-extern cl::opt<bool> FixErrors;
-extern cl::opt<bool> QuietMode;
-
 using ReplacementHandler =
     std::function<void(const clang::SourceManager &, CharSourceRange,
                        llvm::StringRef)>;
+
+void setQuietMode(bool Enabled);
+bool isQuietMode();
 
 // Checker class
 class EastConstChecker : public MatchFinder::MatchCallback {

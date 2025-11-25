@@ -3,7 +3,7 @@
 LLVM_ROOT=/opt/homebrew/Cellar/llvm/21.1.6
 BUILD_DIR=build
 
-cmake -B "$BUILD_DIR" -S . \
+cmake -B "$BUILD_DIR" -S . -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DLLVM_DIR="$LLVM_ROOT/lib/cmake/llvm" \
     -DClang_DIR="$LLVM_ROOT/lib/cmake/clang" \
@@ -28,5 +28,4 @@ cmake --build "$BUILD_DIR"
 #   echo "Skipping manual fix for $W_INPUT (file not found)"
 # fi
 
-# cmake --build build --target test
-"$BUILD_DIR"/east-const-enforcer-test
+ctest --test-dir "$BUILD_DIR" --output-on-failure

@@ -236,7 +236,7 @@ static const std::string kPrivateVar2 = "";
 using ConstStringRef = const std::string&;
 using ConstStringRef2 = const ::std::string&;
 
-int main(int argc, const char *const *argv) {
+int main(int argc, char const *const *argv) {
   auto const kUnusedStringLiteral = R"cpp(
        const int kFoo = 33;
   )cpp";
@@ -273,7 +273,7 @@ static std::string const kPrivateVar2 = "";
 using ConstStringRef = std::string const&;
 using ConstStringRef2 = ::std::string const&;
 
-int main(int argc, const char *const *argv) {
+int main(int argc, char const *const *argv) {
   auto const kUnusedStringLiteral = R"cpp(
        const int kFoo = 33;
   )cpp";

@@ -1,0 +1,26 @@
+[
+  {
+    "name": "standalone_basic",
+    "mode": "standalone-fix",
+    "input": "standalone_basic.in.cpp",
+    "expected": "standalone_basic.expected.cpp",
+    "compile_flags": ["-std=c++17"],
+    "tool_args": ["-quiet"]
+  },
+  {
+    "name": "clang_tidy_fix_basic",
+    "mode": "clang-tidy-fix",
+    "input": "clang_tidy_fix.in.cpp",
+    "expected": "clang_tidy_fix.expected.cpp",
+    "compile_flags": ["-std=c++17"],
+    "clang_tidy_args": ["-quiet"]
+  },
+  {
+    "name": "clang_tidy_lint_basic",
+    "mode": "clang-tidy-lint",
+    "input": "clang_tidy_fix.in.cpp",
+    "expected": "clang_tidy_fix.in.cpp",
+    "compile_flags": ["-std=c++17"],
+    "expect_stdout_contains": ["warning: move qualifier east of the declarator"]
+  }
+]

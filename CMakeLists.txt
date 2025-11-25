@@ -73,3 +73,54 @@ target_link_libraries(east-const-enforcer-test PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(east-const-enforcer-test)
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+if(NOT DEFINED CLANG_TIDY_PATH OR NOT CLANG_TIDY_PATH)
+  if(LLVM_TOOLS_BINARY_DIR AND EXISTS "${LLVM_TOOLS_BINARY_DIR}/clang-tidy")
+    set(CLANG_TIDY_PATH "${LLVM_TOOLS_BINARY_DIR}/clang-tidy")
+  else()
+    find_program(CLANG_TIDY_PATH_DEFAULT NAMES clang-tidy)
+    if(CLANG_TIDY_PATH_DEFAULT)
+      set(CLANG_TIDY_PATH "${CLANG_TIDY_PATH_DEFAULT}")
+    else()
+      set(CLANG_TIDY_PATH "clang-tidy")
+    endif()
+  endif()
+endif()
+
+set(EAST_CONST_INTEGRATION_SCRIPT
+    "${CMAKE_SOURCE_DIR}/tests/integration/run_integration_tests.py")
+
+execute_process(
+  COMMAND ${Python3_EXECUTABLE} ${EAST_CONST_INTEGRATION_SCRIPT} --list-cases
+  OUTPUT_VARIABLE EAST_CONST_INTEGRATION_CASES
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE EAST_CONST_INTEGRATION_LIST_RESULT)
+
+if(NOT EAST_CONST_INTEGRATION_LIST_RESULT EQUAL 0)
+  message(FATAL_ERROR "Failed to enumerate integration cases for CTest")
+endif()
+
+string(REPLACE "\r" "\n" EAST_CONST_INTEGRATION_CASES "${EAST_CONST_INTEGRATION_CASES}")
+string(REGEX REPLACE "\n" ";" EAST_CONST_INTEGRATION_CASE_LIST "${EAST_CONST_INTEGRATION_CASES}")
+list(REMOVE_ITEM EAST_CONST_INTEGRATION_CASE_LIST "")
+
+foreach(EAST_CONST_CASE ${EAST_CONST_INTEGRATION_CASE_LIST})
+  string(REGEX REPLACE "[^A-Za-z0-9_-]" "_" EAST_CONST_CASE_NAME "${EAST_CONST_CASE}")
+  add_test(
+    NAME "east-const-integration-${EAST_CONST_CASE_NAME}"
+    COMMAND ${Python3_EXECUTABLE}
+            ${EAST_CONST_INTEGRATION_SCRIPT}
+            --build-dir ${CMAKE_BINARY_DIR}
+            --clang-tidy ${CLANG_TIDY_PATH}
+            --case ${EAST_CONST_CASE})
+endforeach()
+
+add_test(
+  NAME east-const-integration
+  COMMAND ${Python3_EXECUTABLE}
+          ${EAST_CONST_INTEGRATION_SCRIPT}
+          --build-dir ${CMAKE_BINARY_DIR}
+          --clang-tidy ${CLANG_TIDY_PATH}
+)

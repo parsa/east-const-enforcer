@@ -431,7 +431,7 @@ TEST_F(EastConstEnforcerTest, NegativeTestCases) {
     int const alreadyEast = 5;
     std::string const& alreadyEastRef = "hello";
     
-    // Function parameters should be unchanged
+    // Function definitions should also be rewritten
     void foo(const int x, int const y) {}
     
     // Non-const types should be unchanged
@@ -439,7 +439,18 @@ TEST_F(EastConstEnforcerTest, NegativeTestCases) {
     std::string normalString = "test";
   )cpp";
   
-  std::string expected = input;  // Should remain unchanged
+  std::string expected = R"cpp(
+    // Already east-const style
+    int const alreadyEast = 5;
+    std::string const& alreadyEastRef = "hello";
+    
+    // Function definitions should also be rewritten
+    void foo(int const x, int const y) {}
+    
+    // Non-const types should be unchanged
+    int nonConst = 10;
+    std::string normalString = "test";
+  )cpp";
   
   testTransformation(input, expected);
 }
@@ -695,6 +706,82 @@ TEST_F(EastConstEnforcerTest, HandlesExoticTemplates) {
 
     template <ConstIntegral T>
     T const getConstIntegral();
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstEnforcerTest, HandlesNamespaceQualifiedReferences) {
+  std::string input = R"cpp(
+    namespace api {
+      struct Finder {
+        struct Result {};
+      };
+    }
+
+    struct UsesMatcher {
+      void setCallback(const api::Finder::Result &Result);
+      const api::Finder::Result &getResult() const;
+    };
+
+    const api::Finder::Result &GlobalResult();
+  )cpp";
+
+  std::string expected = R"cpp(
+    namespace api {
+      struct Finder {
+        struct Result {};
+      };
+    }
+
+    struct UsesMatcher {
+      void setCallback(api::Finder::Result const &Result);
+      api::Finder::Result const &getResult() const;
+    };
+
+    api::Finder::Result const &GlobalResult();
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstEnforcerTest, HandlesFunctionDefinitionParameters) {
+  std::string input = R"cpp(
+    namespace api {
+      struct Finder {
+        struct Result {};
+      };
+    }
+
+    class Handler {
+    public:
+      void consume(const api::Finder::Result &Result) {
+        (void)Result;
+      }
+    };
+
+    const api::Finder::Result &Make(const api::Finder::Result &Result) {
+      return Result;
+    }
+  )cpp";
+
+  std::string expected = R"cpp(
+    namespace api {
+      struct Finder {
+        struct Result {};
+      };
+    }
+
+    class Handler {
+    public:
+      void consume(api::Finder::Result const &Result) {
+        (void)Result;
+      }
+    };
+
+    api::Finder::Result const &Make(api::Finder::Result const &Result) {
+      return Result;
+    }
   )cpp";
 
   testTransformation(input, expected);

@@ -16,6 +16,13 @@
 
 namespace {
 
+cl::OptionCategory EastConstCategory("east-const-enforcer options");
+cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
+cl::opt<bool> FixErrors("fix", cl::desc("Apply fixes to diagnosed warnings"),
+                        cl::cat(EastConstCategory));
+cl::opt<bool> QuietFlag("quiet", cl::desc("Suppress informational output"),
+                        cl::cat(EastConstCategory));
+
 class RefactoringReplacementHandler {
 public:
   explicit RefactoringReplacementHandler(RefactoringTool &Tool) : Tool(Tool) {}
@@ -30,7 +37,7 @@ public:
     auto &FileReplacements = Tool.getReplacements()[FilePath];
     llvm::Error Err = FileReplacements.add(Rep);
     if (Err) {
-      if (!QuietMode) {
+      if (!isQuietMode()) {
         llvm::errs() << "Error adding replacement to "
                      << FilePath << ": "
                      << llvm::toString(std::move(Err)) << "\n";
@@ -38,7 +45,7 @@ public:
       return;
     }
 
-    if (!QuietMode && !NewText.empty()) {
+    if (!isQuietMode() && !NewText.empty()) {
       llvm::errs() << "Inserted qualifier suffix '" << NewText << "' in "
                    << FilePath << "\n";
     }
@@ -63,6 +70,8 @@ int main(int argc, const char **argv) {
     RefactoringTool Tool(OptionsParser.getCompilations(),
                         OptionsParser.getSourcePathList());
     
+    setQuietMode(QuietFlag);
+
     if (FixErrors) {
       llvm::errs() << "Fix mode enabled\n";
     }

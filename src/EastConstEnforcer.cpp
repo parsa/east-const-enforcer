@@ -14,13 +14,12 @@ using namespace clang;
 using namespace clang::tooling;
 using namespace llvm;
 
-// Command line options
-cl::OptionCategory EastConstCategory("east-const-enforcer options");
-cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
-cl::opt<bool> FixErrors("fix", cl::desc("Apply fixes to diagnosed warnings"),
-                        cl::cat(EastConstCategory));
-cl::opt<bool> QuietMode("quiet", cl::desc("Suppress informational output"),
-                        cl::cat(EastConstCategory));
+namespace {
+bool QuietModeFlag = false;
+}
+
+void setQuietMode(bool Enabled) { QuietModeFlag = Enabled; }
+bool isQuietMode() { return QuietModeFlag; }
 
 EastConstChecker::EastConstChecker(ReplacementHandler Handler)
   : ReplacementCallback(std::move(Handler)) {}
@@ -112,20 +111,15 @@ void EastConstChecker::processFunctionDecl(const FunctionDecl *FD,
     TypeLoc TL = TSI->getTypeLoc();
     if (auto FnTL = TL.getAs<FunctionTypeLoc>()) {
       processTypeLoc(FnTL.getReturnLoc(), SM, LangOpts);
-      bool SkipParams = FD->isThisDeclarationADefinition();
-      if (!SkipParams) {
-        for (unsigned I = 0; I < FnTL.getNumParams(); ++I)
-          processDeclaratorDecl(FnTL.getParam(I), SM, LangOpts);
-      }
+      for (unsigned I = 0; I < FnTL.getNumParams(); ++I)
+        processDeclaratorDecl(FnTL.getParam(I), SM, LangOpts);
       return;
     }
   }
 
-  // Fallback: process parameter declarations directly.
-  if (!FD->isThisDeclarationADefinition()) {
-    for (const ParmVarDecl *Param : FD->parameters())
-      processDeclaratorDecl(Param, SM, LangOpts);
-  }
+  // Fallback when no TypeSourceInfo is available.
+  for (const ParmVarDecl *Param : FD->parameters())
+    processDeclaratorDecl(Param, SM, LangOpts);
 }
 
 void EastConstChecker::processClassTemplateSpec(
@@ -172,7 +166,7 @@ void EastConstChecker::processTypeLoc(TypeLoc TL, SourceManager &SM,
       for (unsigned I = 0; I < TemplateTL.getNumArgs(); ++I) {
         TemplateArgumentLoc ArgLoc = TemplateTL.getArgLoc(I);
         if (!ArgLoc.getTypeSourceInfo()) {
-          if (!QuietMode) {
+          if (!isQuietMode()) {
             llvm::errs() << "Missing type source info for template argument at "
                          << ArgLoc.getSourceRange().printToString(SM) << "\n";
           }
@@ -272,7 +266,7 @@ void EastConstChecker::processQualifiedTypeLoc(QualifiedTypeLoc QTL,
   Qualifiers Quals = QTL.getType().getLocalQualifiers();
   if (!Quals.hasConst() && !Quals.hasVolatile() && !Quals.hasRestrict())
     return;
-  if (!QuietMode) {
+  if (!isQuietMode()) {
     std::string TypeDesc = QTL.getType().getAsString();
     if (TypeDesc.find("Foo::") != std::string::npos) {
       llvm::errs() << "Processing qualified type '" << TypeDesc << "' at "
@@ -283,7 +277,7 @@ void EastConstChecker::processQualifiedTypeLoc(QualifiedTypeLoc QTL,
   TypeLoc Unqualified = QTL.getUnqualifiedLoc();
   if (Unqualified.isNull())
     return;
-  if (!QuietMode) {
+  if (!isQuietMode()) {
     if (auto TypedefTL = Unqualified.getAs<TypedefTypeLoc>()) {
       SourceLocation NameLoc = TypedefTL.getNameLoc();
       llvm::errs() << "Typedef loc "
@@ -322,7 +316,7 @@ void EastConstChecker::processQualifiedTypeLoc(QualifiedTypeLoc QTL,
   if (UseSpellingFallback) {
     if (!findQualifierRangeFromSpelling(QTL, SM, LangOpts, QualBegin,
                                         RemovalEnd, MovedQualifiers)) {
-      if (!QuietMode) {
+      if (!isQuietMode()) {
         llvm::errs() << "Failed to find qualifier range for type '"
                      << QTL.getType().getAsString() << "' at "
                      << QTL.getSourceRange().printToString(SM) << "\n";
@@ -332,7 +326,7 @@ void EastConstChecker::processQualifiedTypeLoc(QualifiedTypeLoc QTL,
   } else {
     if (!findQualifierRange(QTL, SM, LangOpts, QualBegin, RemovalEnd,
                             MovedQualifiers)) {
-      if (!QuietMode) {
+      if (!isQuietMode()) {
         llvm::errs() << "Failed to find qualifier range for type '"
                      << QTL.getType().getAsString() << "' at "
                      << Unqualified.getSourceRange().printToString(SM)
@@ -479,57 +473,39 @@ bool EastConstChecker::shouldUseSpellingFallback(QualifiedTypeLoc QTL,
   if (!Ty)
     return true;
 
-  return isa<AutoType>(Ty) || isa<DecltypeType>(Ty) ||
-         isa<UnresolvedUsingType>(Ty) || isa<TemplateTypeParmType>(Ty) ||
-         isa<InjectedClassNameType>(Ty) ||
-         [&]() {
-           SourceRange FullRange = QTL.getSourceRange();
-           SourceLocation TypeBegin = SM.getFileLoc(FullRange.getBegin());
-           SourceLocation TypeEnd = SM.getFileLoc(FullRange.getEnd());
-           if (TypeBegin.isInvalid() || TypeEnd.isInvalid()) {
-             if (!QuietMode)
-               llvm::errs() << "Spelling fallback: invalid locs\n";
-             return false;
-           }
-           if (TypeBegin.isMacroID() || TypeEnd.isMacroID()) {
-             if (!QuietMode)
-               llvm::errs() << "Spelling fallback: macro locs\n";
-             return false;
-           }
-           SourceLocation AfterEnd =
-               Lexer::getLocForEndOfToken(TypeEnd, 0, SM, LangOpts);
-           if (AfterEnd.isInvalid()) {
-             if (!QuietMode)
-               llvm::errs() << "Spelling fallback: invalid AfterEnd\n";
-             return false;
-           }
-           CharSourceRange Range =
-               CharSourceRange::getCharRange(TypeBegin, AfterEnd);
-           StringRef Text = Lexer::getSourceText(Range, SM, LangOpts);
-           if (Text.contains("decltype") || Text.contains("auto"))
-             return true;
+  if (isa<AutoType>(Ty) || isa<DecltypeType>(Ty) ||
+      isa<UnresolvedUsingType>(Ty) || isa<TemplateTypeParmType>(Ty) ||
+      isa<InjectedClassNameType>(Ty))
+    return true;
 
-           SourceLocation RangeBegin = SM.getFileLoc(QTL.getBeginLoc());
-           if (RangeBegin.isInvalid() || RangeBegin.isMacroID())
-             return false;
+  SourceRange FullRange = QTL.getSourceRange();
+  SourceLocation RangeBegin = SM.getFileLoc(FullRange.getBegin());
+  SourceLocation RangeEnd = Lexer::getLocForEndOfToken(
+      SM.getFileLoc(FullRange.getEnd()), 0, SM, LangOpts);
+  if (RangeBegin.isInvalid() || RangeEnd.isInvalid())
+    return true;
+  if (RangeBegin.isMacroID())
+    return false;
 
-           bool InvalidBuf = false;
-           StringRef Buffer = SM.getBufferData(SM.getFileID(RangeBegin), &InvalidBuf);
-           if (InvalidBuf)
-             return false;
+  bool InvalidBuf = false;
+  StringRef Buffer = SM.getBufferData(SM.getFileID(RangeBegin), &InvalidBuf);
+  if (InvalidBuf)
+    return true;
 
-           const char *BeginPtr = SM.getCharacterData(RangeBegin);
-           if (!BeginPtr)
-             return false;
+  const char *BeginPtr = SM.getCharacterData(RangeBegin);
+  const char *EndPtr = SM.getCharacterData(RangeEnd);
+  if (!BeginPtr || !EndPtr || EndPtr <= BeginPtr)
+    return true;
 
-           const char *BufferEnd = Buffer.end();
-           const size_t MaxLookahead = 96;
-           const char *ScanEnd = BeginPtr + MaxLookahead;
-           if (ScanEnd > BufferEnd)
-             ScanEnd = BufferEnd;
-           StringRef Window(BeginPtr, ScanEnd - BeginPtr);
-           return Window.contains("decltype") || Window.contains("auto");
-         }();
+  const size_t MaxLookahead = 96;
+  const char *ScanEnd = BeginPtr + MaxLookahead;
+  if (ScanEnd > EndPtr)
+    ScanEnd = EndPtr;
+  if (ScanEnd > Buffer.end())
+    ScanEnd = Buffer.end();
+
+  StringRef Window(BeginPtr, ScanEnd - BeginPtr);
+  return Window.contains("decltype") || Window.contains("auto");
 }
 
 bool EastConstChecker::typeLocNeedsSpellingFallback(TypeLoc TL) const {
