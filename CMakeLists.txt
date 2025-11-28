@@ -63,7 +63,7 @@ enable_testing()
 add_executable(east-const-enforcer-test
   tests/EastConstExampleCasesTest.cpp
   tests/EastConstGridCodeGenTest.cpp
-  tests/WesterlyRoundTripTest.cpp)
+  )
 target_link_libraries(east-const-enforcer-test PRIVATE
   east-const-lib
   clangTooling

@@ -348,6 +348,133 @@ TEST_F(EastConstExampleCasesTest, HandlesMacros) {
   testTransformation(input, expected);
 }
 
+TEST_F(EastConstExampleCasesTest, HandlesCommentInterleavingAndLiterals) {
+  std::string input = R"cpp(
+    #define SOME_MACRO(x) static_assert(true, #x)
+
+    /* Leading block */
+    const std::string name1 = "const should stay";
+
+    const
+    // inline comment
+    std::string name2 = "const";
+
+    const std::string
+    /* block between */
+    name3 = "still const";
+
+    const std::string name4 /* trailing comment */ = R"str(
+      const auto inside_string = true;
+    )str";
+
+    SOME_MACRO(const);
+  )cpp";
+
+  std::string expected = R"cpp(
+    #define SOME_MACRO(x) static_assert(true, #x)
+
+    /* Leading block */
+    std::string const name1 = "const should stay";
+
+    // inline comment
+    std::string const name2 = "const";
+
+    std::string const
+    /* block between */
+    name3 = "still const";
+
+    std::string const name4 /* trailing comment */ = R"str(
+      const auto inside_string = true;
+    )str";
+
+    SOME_MACRO(const);
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstExampleCasesTest, HandlesStructuredBindingsAndConcepts) {
+  std::string input = R"cpp(
+    struct Point {
+      int first;
+      int second;
+    };
+
+    const Point source{1, 2};
+    const auto [a, b] = source;
+    const auto& [ra, rb] = source;
+    const auto&& forwarded = Point{3, 4};
+
+    consteval const int compute() { return 42; }
+    constinit const int GlobalValue = compute();
+
+    template <typename T>
+    requires std::is_integral_v<T>
+    const T twice(const T& value) {
+      return value + value;
+    }
+  )cpp";
+
+  std::string expected = R"cpp(
+    struct Point {
+      int first;
+      int second;
+    };
+
+    Point const source{1, 2};
+    auto const [a, b] = source;
+    auto const& [ra, rb] = source;
+    auto const&& forwarded = Point{3, 4};
+
+    consteval int const compute() { return 42; }
+    constinit int const GlobalValue = compute();
+
+    template <typename T>
+    requires std::is_integral_v<T>
+    T const twice(T const& value) {
+      return value + value;
+    }
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
+TEST_F(EastConstExampleCasesTest, HandlesContinuationsAndDirectives) {
+  std::string input = R"cpp(
+    #define WRAP_CONST(name) const int name = 7;
+
+    const int continued \
+    = 1;
+
+    const int spaced =\
+    2;
+
+    #if 1
+    const std::string active = "enabled";
+    #else
+    const std::string inactive = "disabled";
+    #endif
+  )cpp";
+
+  std::string expected = R"cpp(
+    #define WRAP_CONST(name) const int name = 7;
+
+    int const continued \
+    = 1;
+
+    int const spaced =\
+    2;
+
+    #if 1
+    std::string const active = "enabled";
+    #else
+    const std::string inactive = "disabled";
+    #endif
+  )cpp";
+
+  testTransformation(input, expected);
+}
+
 TEST_F(EastConstExampleCasesTest, HandlesAdvancedFunctionPointers) {
   std::string input = R"cpp(
     struct Foo {
