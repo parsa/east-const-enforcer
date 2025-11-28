@@ -11,9 +11,9 @@ jobs:
   build-and-test:
     runs-on: ubuntu-22.04
     env:
-      LLVM_VERSION: 21.1.0
-      LLVM_ARCHIVE: clang+llvm-21.1.0-x86_64-linux-gnu-ubuntu-22.04
-      LLVM_ROOT: ${{ github.workspace }}/llvm-21.1.0
+      LLVM_VERSION: 21.1.6
+      LLVM_ARCHIVE: LLVM-21.1.6-Linux-X64
+      LLVM_ROOT: ${{ github.workspace }}/llvm-21.1.6
     steps:
       - name: Checkout
         uses: actions/checkout@v4
