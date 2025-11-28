@@ -11,8 +11,9 @@ jobs:
   build-and-test:
     runs-on: ubuntu-22.04
     env:
-      LLVM_VERSION: 21
-      LLVM_ROOT: /usr/lib/llvm-21
+      LLVM_VERSION: 21.1.0
+      LLVM_ARCHIVE: LLVM-21.1.0-Linux-64bit
+      LLVM_ROOT: ${{ github.workspace }}/llvm-21.1.0
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,21 +28,32 @@ jobs:
             python3-pip \
             libedit-dev \
             libcurl4-openssl-dev \
+            libffi-dev \
+            libxml2-dev \
+            zlib1g-dev \
+            xz-utils \
+            curl \
             lsb-release \
             wget \
             gnupg \
             software-properties-common
 
-      - name: Install LLVM toolchain (${LLVM_VERSION})
+      - name: Cache LLVM toolchain
+        id: cache-llvm
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LLVM_ROOT }}
+          key: ${{ runner.os }}-llvm-${{ env.LLVM_VERSION }}
+
+      - name: Download LLVM toolchain
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh ${LLVM_VERSION}
-          sudo apt-get install -y \
-            clang-${LLVM_VERSION} \
-            libclang-${LLVM_VERSION}-dev \
-            libclang-common-${LLVM_VERSION}-dev \
-            llvm-${LLVM_VERSION}-dev
+          curl -L "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/${LLVM_ARCHIVE}.tar.xz" -o llvm.tar.xz
+          tar -xJf llvm.tar.xz
+          mv "${LLVM_ARCHIVE}" "${LLVM_ROOT}"
+
+      - name: Add LLVM to PATH
+        run: echo "${LLVM_ROOT}/bin" >> "$GITHUB_PATH"
 
       - name: Cache CMake/FetchContent deps
         uses: actions/cache@v4
@@ -57,7 +69,8 @@ jobs:
           cmake \
             --preset ninja-release \
             -DLLVM_DIR=${LLVM_ROOT}/lib/cmake/llvm \
-            -DClang_DIR=${LLVM_ROOT}/lib/cmake/clang
+            -DClang_DIR=${LLVM_ROOT}/lib/cmake/clang \
+            -DCLANG_TIDY_PATH=${LLVM_ROOT}/bin/clang-tidy
 
       - name: Build
         run: cmake --build --preset ninja-release
