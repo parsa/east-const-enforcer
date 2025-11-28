@@ -70,7 +70,12 @@ jobs:
             --preset ninja-release \
             -DLLVM_DIR=${LLVM_ROOT}/lib/cmake/llvm \
             -DClang_DIR=${LLVM_ROOT}/lib/cmake/clang \
-            -DCLANG_TIDY_PATH=${LLVM_ROOT}/bin/clang-tidy
+            -DCLANG_TIDY_PATH=${LLVM_ROOT}/bin/clang-tidy \
+            -DCMAKE_C_COMPILER=${LLVM_ROOT}/bin/clang \
+            -DCMAKE_CXX_COMPILER=${LLVM_ROOT}/bin/clang++ \
+            -DCMAKE_EXE_LINKER_FLAGS_INIT="-fuse-ld=lld" \
+            -DCMAKE_SHARED_LINKER_FLAGS_INIT="-fuse-ld=lld" \
+            -DCMAKE_MODULE_LINKER_FLAGS_INIT="-fuse-ld=lld"
 
       - name: Build
         run: cmake --build --preset ninja-release
