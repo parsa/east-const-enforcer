@@ -6,7 +6,7 @@
 
 ## Current State
 - **Transformation logic feature-complete:** Core handlers in `src/EastConstEnforcer.cpp` now rewrite variables, function signatures (return + params), class members, typedefs, using-aliases, template arguments, and non-type template parameters while preserving existing east-const tokens.
-- **Tests green:** Running `./make.sh` drives CTest, which runs both the GoogleTest suite in `tests/EastConstEnforcerTest.cpp` and the new integration harness under `tests/integration`.
+- **Tests green:** Running `./make.sh` drives CTest, which runs the GoogleTest suites in `tests/EastConstExampleCasesTest.cpp`, `tests/EastConstGridCodeGenTest.cpp`, `tests/WesterlyRoundTripTest.cpp`, and the integration harness under `tests/integration`.
 - **Edge-case coverage:** Complex pointer/reference combinations, nested template arguments, and mixed `const`/`volatile` qualifiers are handled; only macro-expanded code and compiler-generated ranges remain intentionally untouched.
 
 ## Build & Test Workflow
@@ -27,11 +27,12 @@
   - The `east-const-tidy` module (built automatically with the regular targets) lives at `build/libeast-const-tidy.dylib` on macOS.
   - Load it with clang-tidy: `clang-tidy -load ./build/libeast-const-tidy.dylib -checks=-*,east-const-enforcer file.cpp -- <compile flags>`.
   - Provide the same compile commands (typically via `compile_commands.json`) that you would supply to the standalone refactoring tool.
+  e.g., `/opt/homebrew/Cellar/llvm/21.1.6/bin/clang-tidy -load /Users/parsa/Repositories/playground/east-const-enforcer/build/libeast-const-tidy.so '-checks=-*,east-const-enforcer' 'src/EastConstEnforcer.2.cpp' -fix -- -Iinclude -std=c++17 -I /opt/homebrew/Cellar/llvm/21.1.6/include/`
 
 ### Configuring toolchains
 - The preset references `cmake/toolchains/homebrew-llvm.cmake`. Adjust `LLVM_ROOT` inside that file (or export `LLVM_ROOT` in your environment) to point at a different LLVM/Clang installation.
 - On macOS the toolchain automatically asks `xcrun` for the active SDK so you no longer have to pass `-DCMAKE_OSX_SYSROOT` manually.
-- During configure CMake emits `build/tests/integration/config.json` containing the exact flags the integration harness should pass to compilers (default `-std=c++17` plus every implicit `-isystem` include). Override or extend the defaults via the cache variables `EAST_CONST_INTEGRATION_EXTRA_INCLUDE_DIRS`, `EAST_CONST_INTEGRATION_EXTRA_FLAGS`, `EAST_CONST_INTEGRATION_DEFAULT_TOOL_ARGS`, and `EAST_CONST_INTEGRATION_DEFAULT_TIDY_ARGS`.
+- During configure CMake emits `build/tests/integration/config.json` containing the exact flags the integration harness should pass to compilers (default `-std=c++17` plus every implicit `-isystem` include). Override or extend the defaults via the cache variables `EAST_CONST_TEST_EXTRA_INCLUDE_DIRS`, `EAST_CONST_TEST_EXTRA_FLAGS`, `EAST_CONST_TEST_DEFAULT_TOOL_ARGS`, and `EAST_CONST_TEST_DEFAULT_TIDY_ARGS`.
 - All CTest integration targets now supply `--config build/tests/integration/config.json`, so the Python runner never probes the host toolchain—everything comes from the values recorded at configure time.
 
 ## Tests to Keep Green

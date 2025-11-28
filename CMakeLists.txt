@@ -61,14 +61,15 @@ enable_testing()
 
 # Add test executable
 add_executable(east-const-enforcer-test
-  tests/EastConstEnforcerTest.cpp
+  tests/EastConstExampleCasesTest.cpp
+  tests/EastConstGridCodeGenTest.cpp
   tests/WesterlyRoundTripTest.cpp)
 target_link_libraries(east-const-enforcer-test PRIVATE
   east-const-lib
   clangTooling
   clangBasic
   clangASTMatchers
-  gtest_main
+  gtest
   pthread)
 
 include(GoogleTest)
@@ -89,13 +90,10 @@ if(NOT DEFINED CLANG_TIDY_PATH OR NOT CLANG_TIDY_PATH)
   endif()
 endif()
 
-set(EAST_CONST_INTEGRATION_SCRIPT
-    "${CMAKE_SOURCE_DIR}/tests/integration/run_integration_tests.py")
-
-include(cmake/EastConstTestHarness.cmake)
-add_east_const_integration_tests(
-  BUILD_DIR ${CMAKE_BINARY_DIR}
-  SCRIPT ${EAST_CONST_INTEGRATION_SCRIPT}
-  PYTHON_EXECUTABLE ${Python3_EXECUTABLE}
-  CLANG_TIDY_PATH ${CLANG_TIDY_PATH}
+include(cmake/IntegrationHarnessSetup.cmake)
+configure_integration_harness(
+  BUILD_DIR "${CMAKE_BINARY_DIR}"
+  SOURCE_DIR "${CMAKE_SOURCE_DIR}"
+  PYTHON_EXECUTABLE "${Python3_EXECUTABLE}"
+  CLANG_TIDY_PATH "${CLANG_TIDY_PATH}"
 )

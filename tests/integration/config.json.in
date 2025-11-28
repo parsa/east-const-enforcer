@@ -1,6 +1,6 @@
 {
-  "default_compile_flags": [@EAST_CONST_COMPILE_FLAGS_JSON@],
-  "default_tool_args": [@EAST_CONST_TOOL_ARGS_JSON@],
-  "default_clang_tidy_args": [@EAST_CONST_TIDY_ARGS_JSON@],
-  "clang_tidy_path": @EAST_CONST_CLANG_TIDY_PATH_JSON@
+  "default_compile_flags": [@EAST_CONST_TEST_COMPILE_FLAGS_JSON@],
+  "default_tool_args": [@EAST_CONST_TEST_TOOL_ARGS_JSON@],
+  "default_clang_tidy_args": [@EAST_CONST_TEST_TIDY_ARGS_JSON@],
+  "clang_tidy_path": @EAST_CONST_TEST_CLANG_TIDY_PATH_JSON@
 }
