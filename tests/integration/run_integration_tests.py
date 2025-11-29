@@ -310,6 +310,8 @@ def main() -> int:
 
   build_dir = Path(args.build_dir).resolve()
   tool_path = build_dir / "east-const-enforcer"
+  if sys.platform.startswith("win"):
+    tool_path = tool_path.with_suffix(".exe")
   ensure_artifact(tool_path, "standalone tool")
   plugin_path = locate_plugin(build_dir)
 
