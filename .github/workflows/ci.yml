@@ -163,52 +163,44 @@ jobs:
 
       - name: Patch LLVM DIA dependency
         if: runner.os == 'Windows'
-        shell: bash
+        shell: python
+        env:
+          LLVM_ROOT: ${{ env.LLVM_ROOT }}
         run: |
-          set -euo pipefail
-          if command -v cygpath >/dev/null 2>&1; then
-            LLVM_EXPORTS_FILE="$(cygpath -m "${LLVM_ROOT}")/lib/cmake/llvm/LLVMExports.cmake"
-          else
-            LLVM_EXPORTS_FILE="${LLVM_ROOT}/lib/cmake/llvm/LLVMExports.cmake"
-          fi
-          if [[ ! -f "${LLVM_EXPORTS_FILE}" ]]; then
-            echo "LLVMExports.cmake missing at ${LLVM_EXPORTS_FILE}" >&2
-            exit 1
-          fi
-          VSWHERE="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
-          if [[ ! -x "${VSWHERE}" ]]; then
-            echo "vswhere.exe not found at ${VSWHERE}" >&2
-            exit 1
-          fi
-          VS_INSTALL="$(${VSWHERE} -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)"
-          if [[ -z "${VS_INSTALL}" ]]; then
-            echo "Unable to locate Visual Studio installation path" >&2
-            exit 1
-          fi
-          DIA_LIB_WIN="${VS_INSTALL}\\DIA SDK\\lib\\amd64\\diaguids.lib"
-          if [[ ! -f "${DIA_LIB_WIN}" ]]; then
-            echo "DIA SDK library not found at ${DIA_LIB_WIN}" >&2
-            exit 1
-          fi
-          if command -v cygpath >/dev/null 2>&1; then
-            DIA_LIB_CMAKE="$(cygpath -m "${DIA_LIB_WIN}")"
-          else
-            DIA_LIB_CMAKE="${DIA_LIB_WIN//\\/\/}"
-          fi
-          export LLVM_EXPORTS_FILE
-          export DIA_LIB_POSIX="${DIA_LIB_CMAKE}"
-            python3 - <<'PY'
-import os
-from pathlib import Path
+          import os
+          import pathlib
+          import subprocess
 
-exports_path = Path(os.environ["LLVM_EXPORTS_FILE"])
-      replacement = os.environ["DIA_LIB_POSIX"].replace('\\', '/')
-original = "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/DIA SDK/lib/amd64/diaguids.lib"
-data = exports_path.read_text(encoding='utf-8')
-if original not in data:
-    raise SystemExit(f"Expected path '{original}' not found in {exports_path}")
-exports_path.write_text(data.replace(original, replacement), encoding='utf-8')
-PY
+          llvm_root = pathlib.Path(os.environ["LLVM_ROOT"])
+          exports_path = llvm_root / "lib" / "cmake" / "llvm" / "LLVMExports.cmake"
+          if not exports_path.exists():
+              raise SystemExit(f"LLVMExports.cmake missing at {exports_path}")
+
+          vswhere = pathlib.Path(r"C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe")
+          if not vswhere.exists():
+              raise SystemExit(f"vswhere.exe not found at {vswhere}")
+
+          install_dir = subprocess.check_output(
+              [str(vswhere),
+               "-latest",
+               "-products", "*",
+               "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+               "-property", "installationPath"],
+              text=True
+          ).strip()
+          if not install_dir:
+              raise SystemExit("Unable to locate Visual Studio installation path")
+
+          dia_lib = pathlib.Path(install_dir) / "DIA SDK" / "lib" / "amd64" / "diaguids.lib"
+          if not dia_lib.exists():
+              raise SystemExit(f"DIA SDK library not found at {dia_lib}")
+
+          replacement = dia_lib.as_posix()
+          original = "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/DIA SDK/lib/amd64/diaguids.lib"
+          data = exports_path.read_text(encoding="utf-8")
+          if original not in data:
+              raise SystemExit(f"Expected path '{original}' not found in {exports_path}")
+          exports_path.write_text(data.replace(original, replacement), encoding="utf-8")
 
       - name: Add LLVM to PATH
         shell: bash
