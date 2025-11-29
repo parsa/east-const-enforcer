@@ -28,6 +28,7 @@ endif()
 
 find_package(LLVM REQUIRED CONFIG)
 find_package(Clang REQUIRED CONFIG)
+find_package(Threads REQUIRED)
 
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
@@ -93,7 +94,7 @@ target_link_libraries(east-const-enforcer-test PRIVATE
   clangBasic
   clangASTMatchers
   gtest
-  pthread)
+  Threads::Threads)
 
 include(GoogleTest)
 gtest_discover_tests(east-const-enforcer-test)
