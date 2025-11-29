@@ -247,16 +247,24 @@ jobs:
           else
             CMAKE_CCACHE_ARGS=""
           fi
+          LLVM_ROOT_POSIX="${LLVM_ROOT}"
+          CMAKE_C_COMPILER_PATH="${LLVM_ROOT}/bin/clang"
+          CMAKE_CXX_COMPILER_PATH="${LLVM_ROOT}/bin/clang++"
+          CLANG_TIDY_NAME="clang-tidy"
           if command -v cygpath >/dev/null 2>&1; then
             LLVM_ROOT_POSIX="$(cygpath -u "${LLVM_ROOT}")"
-            CMAKE_C_COMPILER_PATH="$(cygpath -u "${LLVM_ROOT}/bin/clang.exe")"
-            CMAKE_CXX_COMPILER_PATH="$(cygpath -u "${LLVM_ROOT}/bin/clang++.exe")"
+            CMAKE_C_COMPILER_PATH="$(cygpath -u "${LLVM_ROOT}/bin/clang")"
+            CMAKE_CXX_COMPILER_PATH="$(cygpath -u "${LLVM_ROOT}/bin/clang++")"
+          fi
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
             CLANG_TIDY_NAME="clang-tidy.exe"
-          else
-            LLVM_ROOT_POSIX="${LLVM_ROOT}"
-            CMAKE_C_COMPILER_PATH="${LLVM_ROOT}/bin/clang.exe"
-            CMAKE_CXX_COMPILER_PATH="${LLVM_ROOT}/bin/clang++.exe"
-            CLANG_TIDY_NAME="clang-tidy"
+            if command -v cygpath >/dev/null 2>&1; then
+              CMAKE_C_COMPILER_PATH="$(cygpath -u "${LLVM_ROOT}/bin/clang.exe")"
+              CMAKE_CXX_COMPILER_PATH="$(cygpath -u "${LLVM_ROOT}/bin/clang++.exe")"
+            else
+              CMAKE_C_COMPILER_PATH="${LLVM_ROOT}/bin/clang.exe"
+              CMAKE_CXX_COMPILER_PATH="${LLVM_ROOT}/bin/clang++.exe"
+            fi
           fi
           cmake \
             --preset ninja-release \
