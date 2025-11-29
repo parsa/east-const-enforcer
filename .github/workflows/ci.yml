@@ -81,7 +81,7 @@ jobs:
           path: ${{ env.LLVM_ROOT }}
           key: ${{ runner.os }}-llvm-${{ env.LLVM_VERSION }}-${{ matrix.name }}
 
-        - name: Resolve LLVM asset
+      - name: Resolve LLVM asset
         if: steps.cache-llvm.outputs.cache-hit != 'true'
         id: resolve-llvm
         shell: python
