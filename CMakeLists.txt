@@ -77,6 +77,40 @@ gtest_discover_tests(east-const-enforcer-test)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+set(_llvm_config_exe "")
+if(LLVM_TOOLS_BINARY_DIR)
+  set(_candidate "${LLVM_TOOLS_BINARY_DIR}/llvm-config")
+  if(EXISTS "${_candidate}")
+    set(_llvm_config_exe "${_candidate}")
+  endif()
+endif()
+if(NOT _llvm_config_exe)
+  find_program(_llvm_config_exe NAMES llvm-config HINTS "${LLVM_TOOLS_BINARY_DIR}" "${LLVM_ROOT}/bin" PATHS "${LLVM_ROOT}/bin")
+endif()
+
+set(_east_const_use_rtti ON)
+if(_llvm_config_exe)
+  execute_process(
+    COMMAND "${_llvm_config_exe}" --has-rtti
+    OUTPUT_VARIABLE _llvm_has_rtti_raw
+    RESULT_VARIABLE _llvm_has_rtti_result
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(_llvm_has_rtti_result EQUAL 0)
+    if(_llvm_has_rtti_raw STREQUAL "NO")
+      set(_east_const_use_rtti OFF)
+    endif()
+  endif()
+endif()
+
+if(NOT _east_const_use_rtti AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU"))
+  message(STATUS "Disabling RTTI for east-const targets to match LLVM configuration")
+  foreach(_east_const_target IN ITEMS east-const-lib east-const-enforcer east-const-tidy east-const-enforcer-test)
+    if(TARGET ${_east_const_target})
+      target_compile_options(${_east_const_target} PRIVATE -fno-rtti)
+    endif()
+  endforeach()
+endif()
+
 if(NOT DEFINED CLANG_TIDY_PATH OR NOT CLANG_TIDY_PATH)
   if(LLVM_TOOLS_BINARY_DIR AND EXISTS "${LLVM_TOOLS_BINARY_DIR}/clang-tidy")
     set(CLANG_TIDY_PATH "${LLVM_TOOLS_BINARY_DIR}/clang-tidy")
