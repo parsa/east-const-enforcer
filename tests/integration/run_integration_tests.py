@@ -101,6 +101,38 @@ def ensure_artifact(path: Path, description: str) -> None:
     raise CaseFailure(f"Missing {description} at {path}")
 
 
+def verify_clang_tidy_check(clang_tidy: str, plugin_path: Path) -> None:
+  cmd = [
+      clang_tidy,
+      "-load",
+      str(plugin_path),
+      "-list-checks",
+      "-checks=-*,east-const-enforcer",
+  ]
+  try:
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+  except FileNotFoundError as err:
+    raise CaseFailure(
+        f"Failed to execute clang-tidy when verifying plugin availability: {err}"
+    ) from err
+
+  if result.returncode != 0:
+    raise CaseFailure(
+        "clang-tidy could not list checks with the east-const plugin loaded.\n"
+        f"Command: {format_command(cmd)}\n"
+        f"STDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+    )
+
+  if "east-const-enforcer" not in result.stdout:
+    raise CaseFailure(
+        "clang-tidy did not report the 'east-const-enforcer' check after loading the plugin.\n"
+        f"Command: {format_command(cmd)}\n"
+        f"STDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+    )
+
+
 def write_compile_commands(directory: Path, source: Path, flags: list[str]) -> None:
   compile_commands = [
       {
@@ -334,6 +366,8 @@ def main() -> int:
       print("Unknown integration case(s): " + ", ".join(missing), file=sys.stderr)
       return 1
     cases = [cases_by_name[name] for name in args.selected_cases]
+
+  verify_clang_tidy_check(clang_tidy_path, plugin_path)
 
   failures: list[str] = []
   for case in cases:
