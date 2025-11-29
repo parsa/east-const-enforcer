@@ -132,21 +132,26 @@ jobs:
           pushd "$tmpdir" >/dev/null
           archive_url="${{ steps.resolve-llvm.outputs.archive_url }}"
           archive_name="${{ steps.resolve-llvm.outputs.archive_name }}"
+          if command -v cygpath >/dev/null 2>&1; then
+            LLVM_ROOT_POSIX="$(cygpath -u "${LLVM_ROOT}")"
+          else
+            LLVM_ROOT_POSIX="${LLVM_ROOT}"
+          fi
           echo "Resolved LLVM archive: ${archive_name}"
           curl -fL "${archive_url}" -o "${archive_name}"
-          mkdir -p "${LLVM_ROOT}"
+          mkdir -p "${LLVM_ROOT_POSIX}"
           if [[ "${archive_name}" == *.tar.xz ]]; then
-            tar -xJf "${archive_name}" --strip-components=1 -C "${LLVM_ROOT}"
+            tar -xJf "${archive_name}" --strip-components=1 -C "${LLVM_ROOT_POSIX}"
           elif [[ "${archive_name}" == *.tar.gz ]]; then
-            tar -xzf "${archive_name}" --strip-components=1 -C "${LLVM_ROOT}"
+            tar -xzf "${archive_name}" --strip-components=1 -C "${LLVM_ROOT_POSIX}"
           elif [[ "${archive_name}" == *.zip ]]; then
             unzip -q "${archive_name}" -d extracted
             shopt -s dotglob
             entries=(extracted/*)
             if [[ ${#entries[@]} -eq 1 && -d "${entries[0]}" ]]; then
-              mv "${entries[0]}"/* "${LLVM_ROOT}/"
+              mv "${entries[0]}"/* "${LLVM_ROOT_POSIX}/"
             else
-              mv extracted/* "${LLVM_ROOT}/"
+              mv extracted/* "${LLVM_ROOT_POSIX}/"
             fi
             shopt -u dotglob
           else
