@@ -161,6 +161,55 @@ jobs:
           popd >/dev/null
           rm -rf "$tmpdir"
 
+      - name: Patch LLVM DIA dependency
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v cygpath >/dev/null 2>&1; then
+            LLVM_EXPORTS_FILE="$(cygpath -m "${LLVM_ROOT}")/lib/cmake/llvm/LLVMExports.cmake"
+          else
+            LLVM_EXPORTS_FILE="${LLVM_ROOT}/lib/cmake/llvm/LLVMExports.cmake"
+          fi
+          if [[ ! -f "${LLVM_EXPORTS_FILE}" ]]; then
+            echo "LLVMExports.cmake missing at ${LLVM_EXPORTS_FILE}" >&2
+            exit 1
+          fi
+          VSWHERE="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          if [[ ! -x "${VSWHERE}" ]]; then
+            echo "vswhere.exe not found at ${VSWHERE}" >&2
+            exit 1
+          fi
+          VS_INSTALL="$(${VSWHERE} -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)"
+          if [[ -z "${VS_INSTALL}" ]]; then
+            echo "Unable to locate Visual Studio installation path" >&2
+            exit 1
+          fi
+          DIA_LIB_WIN="${VS_INSTALL}\\DIA SDK\\lib\\amd64\\diaguids.lib"
+          if [[ ! -f "${DIA_LIB_WIN}" ]]; then
+            echo "DIA SDK library not found at ${DIA_LIB_WIN}" >&2
+            exit 1
+          fi
+          if command -v cygpath >/dev/null 2>&1; then
+            DIA_LIB_CMAKE="$(cygpath -m "${DIA_LIB_WIN}")"
+          else
+            DIA_LIB_CMAKE="${DIA_LIB_WIN//\\/\/}"
+          fi
+          export LLVM_EXPORTS_FILE
+          export DIA_LIB_POSIX="${DIA_LIB_CMAKE}"
+            python3 - <<'PY'
+import os
+from pathlib import Path
+
+exports_path = Path(os.environ["LLVM_EXPORTS_FILE"])
+      replacement = os.environ["DIA_LIB_POSIX"].replace('\\', '/')
+original = "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/DIA SDK/lib/amd64/diaguids.lib"
+data = exports_path.read_text(encoding='utf-8')
+if original not in data:
+    raise SystemExit(f"Expected path '{original}' not found in {exports_path}")
+exports_path.write_text(data.replace(original, replacement), encoding='utf-8')
+PY
+
       - name: Add LLVM to PATH
         shell: bash
         run: echo "${LLVM_ROOT}/bin" >> "$GITHUB_PATH"
