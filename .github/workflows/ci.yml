@@ -20,7 +20,7 @@ jobs:
             extra_cmake_args: "-DCMAKE_EXE_LINKER_FLAGS_INIT=-fuse-ld=lld -DCMAKE_SHARED_LINKER_FLAGS_INIT=-fuse-ld=lld -DCMAKE_MODULE_LINKER_FLAGS_INIT=-fuse-ld=lld"
           - name: windows
             os: windows-2022
-            llvm_filters: "Windows,X64"
+            llvm_filters: "clang+llvm,x86_64,windows,msvc"
             use_ccache: false
             extra_cmake_args: ""
     runs-on: ${{ matrix.os }}
