@@ -63,10 +63,8 @@ jobs:
           ccache --version
           export CCACHE_BASEDIR="${{ github.workspace }}"
           export CCACHE_DIR="${{ github.workspace }}/.ccache"
-          ccache --set-config base_dir="${CCACHE_BASEDIR}"
-          ccache --set-config cache_dir="${CCACHE_DIR}"
-          ccache --set-config compiler_check=content
-          ccache --set-config max_size=5G
+          ccache --set-config=compiler_check=content
+          ccache --set-config=max_size=5G
           ccache --zero-stats
           echo "CCACHE_BASEDIR=${CCACHE_BASEDIR}" >> "$GITHUB_ENV"
           echo "CCACHE_DIR=${CCACHE_DIR}" >> "$GITHUB_ENV"
@@ -75,7 +73,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ${{ runner.os }}-ccache-${{ env.LLVM_VERSION }}-${{ github.sha }}
+          key: ${{ runner.os }}-ccache-${{ env.LLVM_VERSION }}-${{ github.ref_name }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ env.LLVM_VERSION }}-
 
@@ -90,18 +88,16 @@ jobs:
 
       - name: Configure (ninja-release)
         run: |
-          export CC="${LLVM_ROOT}/bin/clang"
-          export CXX="${LLVM_ROOT}/bin/clang++"
           which ccache
-          export CC="ccache ${CC}"
-          export CXX="ccache ${CXX}"
           cmake \
             --preset ninja-release \
             -DLLVM_DIR=${LLVM_ROOT}/lib/cmake/llvm \
             -DClang_DIR=${LLVM_ROOT}/lib/cmake/clang \
             -DCLANG_TIDY_PATH=${LLVM_ROOT}/bin/clang-tidy \
-            -DCMAKE_C_COMPILER="${CC}" \
-            -DCMAKE_CXX_COMPILER="${CXX}" \
+            -DCMAKE_C_COMPILER=${LLVM_ROOT}/bin/clang \
+            -DCMAKE_CXX_COMPILER=${LLVM_ROOT}/bin/clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_EXE_LINKER_FLAGS_INIT="-fuse-ld=lld" \
             -DCMAKE_SHARED_LINKER_FLAGS_INIT="-fuse-ld=lld" \
             -DCMAKE_MODULE_LINKER_FLAGS_INIT="-fuse-ld=lld"
@@ -111,3 +107,8 @@ jobs:
 
       - name: Run tests
         run: ctest --preset ninja-release --output-on-failure
+
+      - name: Show ccache stats
+        if: always()
+        run: |
+          ccache --show-stats
