@@ -43,12 +43,6 @@ add_library(east-const-lib STATIC
 set_target_properties(east-const-lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(east-const-lib PUBLIC include)
 
-target_link_libraries(east-const-lib PRIVATE
-  clangTooling
-  clangASTMatchers
-  clangBasic
-  clangFrontend)
-
 # Main executable
 add_executable(east-const-enforcer
   src/prog.cpp)
@@ -63,13 +57,10 @@ target_link_libraries(east-const-enforcer PRIVATE
 add_library(east-const-tidy MODULE
   src/EastConstTidyModule.cpp)
 target_link_libraries(east-const-tidy PRIVATE
-  east-const-lib
-  clangTidy
-  clangTidyUtils
-  clangTooling
-  clangASTMatchers
-  clangFrontend
-  clangBasic)
+  east-const-lib)
+if(APPLE)
+  target_link_options(east-const-tidy PRIVATE "-undefined" "dynamic_lookup")
+endif()
 
 # Add GoogleTest
 include(FetchContent)
