@@ -4,6 +4,28 @@ project(EastConstEnforcer)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(LLVM_LINK_LLVM_DYLIB ON CACHE BOOL "Prefer LLVM shared library" FORCE)
+set(LLVM_LINK_CLANG_DYLIB ON CACHE BOOL "Prefer Clang shared library" FORCE)
+
+if(CMAKE_CXX_COMPILER MATCHES "ccache")
+  message(STATUS "Detected ccache compiler wrapper: parsing CCACHE_BASEDIR")
+  execute_process(
+    COMMAND ${CMAKE_CXX_COMPILER} --print-config
+    OUTPUT_VARIABLE _ccache_config
+    ERROR_QUIET
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  string(REGEX MATCH "CCACHE_BASEDIR=([^\n]+)" _ccache_basedir_match "${_ccache_config}")
+  if(CMAKE_MATCH_COUNT GREATER 0)
+    set(_east_const_ccache_basedir "${CMAKE_MATCH_1}")
+    message(STATUS "Found ccache base dir: ${_east_const_ccache_basedir}")
+  else()
+    set(_east_const_ccache_basedir "${CMAKE_SOURCE_DIR}")
+    message(STATUS "CCACHE_BASEDIR not configured; using source dir")
+  endif()
+else()
+  set(_east_const_ccache_basedir "${CMAKE_SOURCE_DIR}")
+endif()
+
 find_package(LLVM REQUIRED CONFIG)
 find_package(Clang REQUIRED CONFIG)
 
