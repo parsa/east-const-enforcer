@@ -9,16 +9,43 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+            llvm_filters: "Linux,X64"
+            use_ccache: true
+            extra_cmake_args: "-DCMAKE_EXE_LINKER_FLAGS_INIT=-fuse-ld=lld -DCMAKE_SHARED_LINKER_FLAGS_INIT=-fuse-ld=lld -DCMAKE_MODULE_LINKER_FLAGS_INIT=-fuse-ld=lld"
+          - name: windows
+            os: windows-2022
+            llvm_filters: "Windows,X64"
+            use_ccache: false
+            extra_cmake_args: ""
+    runs-on: ${{ matrix.os }}
     env:
       LLVM_VERSION: 21.1.6
-      LLVM_ARCHIVE: LLVM-21.1.6-Linux-X64
-      LLVM_ROOT: ${{ github.workspace }}/llvm-21.1.6
+      LLVM_FILTERS: ${{ matrix.llvm_filters }}
+      USE_CCACHE: ${{ matrix.use_ccache }}
+      EXTRA_CMAKE_ARGS: ${{ matrix.extra_cmake_args }}
+      LLVM_HOME_BASE: ${{ github.workspace }}/toolchains
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build prerequisites
+      - name: Prepare LLVM paths
+        id: prepare-llvm
+        shell: bash
+        run: |
+          set -euo pipefail
+          LLVM_ROOT="${LLVM_HOME_BASE}/${LLVM_VERSION}/${{ matrix.name }}"
+          mkdir -p "${LLVM_ROOT}"
+          echo "LLVM_ROOT=${LLVM_ROOT}" >> "$GITHUB_ENV"
+          echo "llvm_root=${LLVM_ROOT}" >> "$GITHUB_OUTPUT"
+
+      - name: Install build prerequisites (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -26,6 +53,7 @@ jobs:
             cmake \
             python3 \
             python3-pip \
+            python-is-python3 \
             libedit-dev \
             libcurl4-openssl-dev \
             libffi-dev \
@@ -36,33 +64,110 @@ jobs:
             lsb-release \
             wget \
             gnupg \
-            software-properties-common
+            software-properties-common \
+            ccache \
+            unzip
+
+      - name: Install build prerequisites (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ninja cmake -y --no-progress
 
       - name: Cache LLVM toolchain
         id: cache-llvm
         uses: actions/cache@v4
         with:
           path: ${{ env.LLVM_ROOT }}
-          key: ${{ runner.os }}-llvm-${{ env.LLVM_VERSION }}
+          key: ${{ runner.os }}-llvm-${{ env.LLVM_VERSION }}-${{ matrix.name }}
+
+        - name: Resolve LLVM asset
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        id: resolve-llvm
+        shell: python
+        env:
+          LLVM_VERSION: ${{ env.LLVM_VERSION }}
+          LLVM_FILTERS: ${{ env.LLVM_FILTERS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          import json
+          import os
+          import urllib.request
+
+          filters = [segment.strip().lower() for segment in os.environ['LLVM_FILTERS'].split(',') if segment.strip()]
+          if not filters:
+            raise SystemExit('LLVM_FILTERS did not contain any usable filters')
+
+          url = f"https://api.github.com/repos/llvm/llvm-project/releases/tags/llvmorg-{os.environ['LLVM_VERSION']}"
+          request = urllib.request.Request(url)
+          token = os.environ.get('GITHUB_TOKEN')
+          if token:
+            request.add_header('Authorization', f'Bearer {token}')
+
+          with urllib.request.urlopen(request) as response:
+            data = json.load(response)
+
+          chosen = None
+          for asset in data.get('assets', []):
+            name = asset.get('name', '')
+            lower_name = name.lower()
+            if all(fragment in lower_name for fragment in filters):
+              chosen = asset
+              break
+
+          if chosen is None:
+            raise SystemExit(f"Unable to locate LLVM asset matching filters {filters}")
+
+          output_path = os.environ['GITHUB_OUTPUT']
+          with open(output_path, 'a', encoding='utf-8') as fh:
+            fh.write(f"archive_url={chosen['browser_download_url']}\n")
+            fh.write(f"archive_name={chosen['name']}\n")
 
       - name: Download LLVM toolchain
         if: steps.cache-llvm.outputs.cache-hit != 'true'
+        shell: bash
         run: |
-          curl -fL "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/${LLVM_ARCHIVE}.tar.xz" -o llvm.tar.xz
-          tar -xJf llvm.tar.xz
-          mv "${LLVM_ARCHIVE}" "${LLVM_ROOT}"
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          pushd "$tmpdir" >/dev/null
+          archive_url="${{ steps.resolve-llvm.outputs.archive_url }}"
+          archive_name="${{ steps.resolve-llvm.outputs.archive_name }}"
+          echo "Resolved LLVM archive: ${archive_name}"
+          curl -fL "${archive_url}" -o "${archive_name}"
+          mkdir -p "${LLVM_ROOT}"
+          if [[ "${archive_name}" == *.tar.xz ]]; then
+            tar -xJf "${archive_name}" --strip-components=1 -C "${LLVM_ROOT}"
+          elif [[ "${archive_name}" == *.tar.gz ]]; then
+            tar -xzf "${archive_name}" --strip-components=1 -C "${LLVM_ROOT}"
+          elif [[ "${archive_name}" == *.zip ]]; then
+            unzip -q "${archive_name}" -d extracted
+            shopt -s dotglob
+            entries=(extracted/*)
+            if [[ ${#entries[@]} -eq 1 && -d "${entries[0]}" ]]; then
+              mv "${entries[0]}"/* "${LLVM_ROOT}/"
+            else
+              mv extracted/* "${LLVM_ROOT}/"
+            fi
+            shopt -u dotglob
+          else
+            echo "Unsupported LLVM archive format: ${archive_name}" >&2
+            exit 1
+          fi
+          popd >/dev/null
+          rm -rf "$tmpdir"
 
       - name: Add LLVM to PATH
+        shell: bash
         run: echo "${LLVM_ROOT}/bin" >> "$GITHUB_PATH"
 
-      - name: Install ccache
-        run: sudo apt-get install -y ccache
-
       - name: Configure ccache
+        if: matrix.use_ccache
+        shell: bash
         run: |
+          set -euo pipefail
           ccache --version
           export CCACHE_BASEDIR="${{ github.workspace }}"
-          export CCACHE_DIR="${{ github.workspace }}/.ccache"
+          export CCACHE_DIR="${{ github.workspace }}/.ccache/${{ matrix.name }}"
           ccache --set-config=compiler_check=content
           ccache --set-config=max_size=5G
           ccache --zero-stats
@@ -70,12 +175,13 @@ jobs:
           echo "CCACHE_DIR=${CCACHE_DIR}" >> "$GITHUB_ENV"
 
       - name: Cache ccache
+        if: matrix.use_ccache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.ccache
-          key: ${{ runner.os }}-ccache-${{ env.LLVM_VERSION }}-${{ github.ref_name }}
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-${{ env.LLVM_VERSION }}-${{ matrix.name }}-${{ github.ref_name }}
           restore-keys: |
-            ${{ runner.os }}-ccache-${{ env.LLVM_VERSION }}-
+            ${{ runner.os }}-ccache-${{ env.LLVM_VERSION }}-${{ matrix.name }}-
 
       - name: Cache CMake/FetchContent deps
         uses: actions/cache@v4
@@ -84,23 +190,26 @@ jobs:
             build/_deps
             build/googletest-download
             build/googletest-subbuild
-          key: ${{ runner.os }}-cmake-deps-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'tests/**') }}
+          key: ${{ runner.os }}-cmake-deps-${{ matrix.name }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'tests/**') }}
 
       - name: Configure (ninja-release)
+        shell: bash
         run: |
-          which ccache
+          set -euo pipefail
+          if [[ "${USE_CCACHE}" == "true" ]]; then
+            CMAKE_CCACHE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          else
+            CMAKE_CCACHE_ARGS=""
+          fi
           cmake \
             --preset ninja-release \
-            -DLLVM_DIR=${LLVM_ROOT}/lib/cmake/llvm \
-            -DClang_DIR=${LLVM_ROOT}/lib/cmake/clang \
-            -DCLANG_TIDY_PATH=${LLVM_ROOT}/bin/clang-tidy \
-            -DCMAKE_C_COMPILER=${LLVM_ROOT}/bin/clang \
-            -DCMAKE_CXX_COMPILER=${LLVM_ROOT}/bin/clang++ \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_EXE_LINKER_FLAGS_INIT="-fuse-ld=lld" \
-            -DCMAKE_SHARED_LINKER_FLAGS_INIT="-fuse-ld=lld" \
-            -DCMAKE_MODULE_LINKER_FLAGS_INIT="-fuse-ld=lld"
+            -DLLVM_DIR="${LLVM_ROOT}/lib/cmake/llvm" \
+            -DClang_DIR="${LLVM_ROOT}/lib/cmake/clang" \
+            -DCLANG_TIDY_PATH="${LLVM_ROOT}/bin/clang-tidy" \
+            -DCMAKE_C_COMPILER="${LLVM_ROOT}/bin/clang" \
+            -DCMAKE_CXX_COMPILER="${LLVM_ROOT}/bin/clang++" \
+            ${CMAKE_CCACHE_ARGS} \
+            ${EXTRA_CMAKE_ARGS}
 
       - name: Build
         run: cmake --build --preset ninja-release
@@ -109,6 +218,5 @@ jobs:
         run: ctest --preset ninja-release --output-on-failure
 
       - name: Show ccache stats
-        if: always()
-        run: |
-          ccache --show-stats
+        if: always() && matrix.use_ccache
+        run: ccache --show-stats
