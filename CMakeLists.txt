@@ -60,13 +60,16 @@ add_library(east-const-tidy MODULE
 target_link_libraries(east-const-tidy PRIVATE
   east-const-lib)
 if(WIN32)
-  foreach(_east_const_clang_lib IN ITEMS clangTidy clangTooling clangASTMatchers clangBasic clangFrontend)
-    if(TARGET ${_east_const_clang_lib})
-      target_link_libraries(east-const-tidy PRIVATE ${_east_const_clang_lib})
-    endif()
-  endforeach()
-  if(NOT TARGET clangTidy AND TARGET clang-cpp)
+  # Prefer the monolithic clang-cpp import library on Windows so clang-tidy shares
+  # the ClangTidyModuleRegistry with the plugin (avoids static-link registry splits).
+  if(TARGET clang-cpp)
     target_link_libraries(east-const-tidy PRIVATE clang-cpp)
+  else()
+    foreach(_east_const_clang_lib IN ITEMS clangTidy clangTooling clangASTMatchers clangBasic clangFrontend)
+      if(TARGET ${_east_const_clang_lib})
+        target_link_libraries(east-const-tidy PRIVATE ${_east_const_clang_lib})
+      endif()
+    endforeach()
   endif()
 endif()
 if(APPLE)
@@ -77,7 +80,7 @@ endif()
 include(FetchContent)
 FetchContent_Declare(
   googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.zip
+  URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.zip
 )
 FetchContent_MakeAvailable(googletest)
 
