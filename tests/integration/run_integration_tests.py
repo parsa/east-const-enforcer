@@ -79,11 +79,14 @@ def load_runner_config(config_path: Path) -> RunnerConfig:
 
 
 def locate_plugin(build_dir: Path) -> Path:
-  candidates = [
-      build_dir / "libeast-const-tidy.so",
-      build_dir / "libeast-const-tidy.dylib",
-      build_dir / "libeast-const-tidy.dll",
+  candidate_names = [
+      "libeast-const-tidy.so",
+      "libeast-const-tidy.dylib",
+      "libeast-const-tidy.dll",
+      "east-const-tidy.dll",
   ]
+  search_roots = [build_dir, build_dir / "lib", build_dir / "bin"]
+  candidates = [root / name for root in search_roots for name in candidate_names]
   for candidate in candidates:
     if candidate.exists():
       return candidate
