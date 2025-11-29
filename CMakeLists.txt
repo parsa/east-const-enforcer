@@ -30,6 +30,21 @@ find_package(LLVM REQUIRED CONFIG)
 find_package(Clang REQUIRED CONFIG)
 find_package(Threads REQUIRED)
 
+# Some LLVM Windows distributions do not publish an imported clang-cpp target in
+# their CMake configs even though clang-cpp.dll/clang-cpp.lib ship in the
+# toolchain. Create an imported target so the plugin can link against the shared
+# runtime and share the ClangTidy registry with clang-tidy.exe.
+if(WIN32 AND NOT TARGET clang-cpp)
+  set(_east_const_clang_cpp_dll "${LLVM_ROOT}/bin/clang-cpp.dll")
+  set(_east_const_clang_cpp_lib "${LLVM_ROOT}/lib/clang-cpp.lib")
+  if(EXISTS "${_east_const_clang_cpp_dll}" AND EXISTS "${_east_const_clang_cpp_lib}")
+    add_library(clang-cpp SHARED IMPORTED)
+    set_target_properties(clang-cpp PROPERTIES
+      IMPORTED_LOCATION "${_east_const_clang_cpp_dll}"
+      IMPORTED_IMPLIB "${_east_const_clang_cpp_lib}")
+  endif()
+endif()
+
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
@@ -60,16 +75,13 @@ add_library(east-const-tidy MODULE
 target_link_libraries(east-const-tidy PRIVATE
   east-const-lib)
 if(WIN32)
-  # Prefer the monolithic clang-cpp import library on Windows so clang-tidy shares
-  # the ClangTidyModuleRegistry with the plugin (avoids static-link registry splits).
+  # Require the monolithic clang-cpp import library on Windows so clang-tidy
+  # shares the ClangTidyModuleRegistry with the plugin (avoids static-link
+  # registry splits that hide checks).
   if(TARGET clang-cpp)
     target_link_libraries(east-const-tidy PRIVATE clang-cpp)
   else()
-    foreach(_east_const_clang_lib IN ITEMS clangTidy clangTooling clangASTMatchers clangBasic clangFrontend)
-      if(TARGET ${_east_const_clang_lib})
-        target_link_libraries(east-const-tidy PRIVATE ${_east_const_clang_lib})
-      endif()
-    endforeach()
+    message(FATAL_ERROR "clang-cpp target not available; cannot build east-const-tidy without shared clang-cpp")
   endif()
 endif()
 if(APPLE)
